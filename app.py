@@ -84,6 +84,14 @@ import imageio
 import scipy.io.wavfile as wavfile
 from tavily import TavilyClient
 # ===============================================
+# Import du système de modèle local Qwen
+# ===============================================
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.language_models import BaseChatModel
+from typing import Iterator
+# ===============================================
 # Import du système d'outils dynamiques
 # ===============================================
 try:
@@ -93,6 +101,196 @@ try:
 except ImportError as e:
     print(f"⚠️ Système d'outils non disponible: {e}")
     TOOLS_SYSTEM_AVAILABLE = False
+# ===============================================
+# Classe ChatModel personnalisée pour LangChain utilisant Qwen2.5-1.5B
+# ===============================================
+class QwenChatModel(BaseChatModel):
+    tokenizer: AutoTokenizer = None
+    model: AutoModelForCausalLM = None
+    tools_available: bool = True
+   
+    def __init__(self, tokenizer, model):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.model = model
+        self.tools_available = True
+       
+    @property
+    def _llm_type(self) -> str:
+        return "qwen2.5-1.5b-local-enhanced"
+    
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        """Generate a response using tools and analyses."""
+        # Extraire le contenu du message utilisateur
+        user_message = ""
+        for message in messages:
+            if isinstance(message, HumanMessage):
+                user_message = message.content
+                break
+       
+        # Détecter si l'utilisateur demande une analyse
+        needs_analysis = any(keyword in user_message.lower() for keyword in [
+            "analyse", "resistivité", "ert", "recherche", "données", "matériaux",
+            "couleurs", "graphique", "tableau", "comparaison", "approfondie"
+        ])
+       
+        if needs_analysis and self.tools_available:
+            # Utiliser les outils disponibles pour une analyse complète
+            try:
+                # Recherche web pour informations
+                if any(keyword in user_message.lower() for keyword in ["recherche", "informations", "approfondie"]):
+                    search_query = user_message.replace("fais maintenant une recherche plus approfondie pour obtenir toutes ces informations précises", "")
+                    web_results = web_search_enhanced(search_query + " ERT electrical resistivity geophysics materials")
+                   
+                # Recherche RAG si disponible
+                rag_results = ""
+                if st.session_state.get('vectordb'):
+                    rag_results = rag_search(user_message, st.session_state.vectordb)
+               
+                # Génération de données et analyses si demandées
+                analysis_results = ""
+                if any(keyword in user_message.lower() for keyword in ["tableau", "graphique", "données"]):
+                    # Simuler des données ERT pour démonstration
+                    import numpy as np
+                    sample_data = [0.05, 0.3, 10.0, 50.0, 200.0, 1000.0, 5000.0, 0.0000024, 1000000]
+                    analysis_results = resistivity_color_analysis(sample_data)
+               
+                # Construire la réponse enrichie avec outils
+                enhanced_context = f"""
+🔍 ANALYSE COMPLÈTE AVEC OUTILS ACTIVÉS:
+🌐 RECHERCHE WEB EFFECTUÉE:
+{web_results}
+📚 RECHERCHE RAG:
+{rag_results}
+📊 ANALYSE ERT AVANCÉE:
+{analysis_results}
+CONTEXTE UTILISATEUR: {user_message}
+"""
+               
+                # Générer la réponse avec le contexte enrichi
+                enhanced_messages = [
+                    {"role": "system", "content": """Tu es un expert en géophysique ERT avec accès à des outils puissants.
+                    Tu DOIS utiliser les données fournies pour créer des analyses détaillées, tableaux, graphiques et comparaisons.
+                    Réponds toujours avec des données concrètes et des analyses approfondies basées sur les outils utilisés.
+                    Ne dis JAMAIS que tu n'as pas accès aux outils - utilise les résultats fournis."""},
+                    {"role": "user", "content": enhanced_context}
+                ]
+            except Exception as e:
+                print(f"Erreur outils: {e}")
+                enhanced_messages = [
+                    {"role": "system", "content": "Tu es un expert en analyse de données ERT."},
+                    {"role": "user", "content": user_message}
+                ]
+        else:
+            # Messages standard
+            enhanced_messages = []
+            for message in messages:
+                if isinstance(message, SystemMessage):
+                    enhanced_messages.append({"role": "system", "content": message.content})
+                elif isinstance(message, HumanMessage):
+                    enhanced_messages.append({"role": "user", "content": message.content})
+                elif isinstance(message, AIMessage):
+                    enhanced_messages.append({"role": "assistant", "content": message.content})
+       
+        # Génération avec les messages enrichis
+        inputs = self.tokenizer.apply_chat_template(
+            enhanced_messages,
+            add_generation_prompt=True,
+            return_tensors="pt"
+        ).to(self.model.device)
+       
+        attention_mask = (inputs != self.tokenizer.pad_token_id).long()
+       
+        with torch.no_grad():
+            outputs = self.model.generate(
+                inputs,
+                attention_mask=attention_mask,
+                max_new_tokens=3000,  # 3000 tokens pour réponses TRÈS détaillées
+                temperature=0.6,
+                do_sample=True,
+                top_p=0.9,
+                repetition_penalty=1.05,  # Éviter répétitions
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+       
+        response = self.tokenizer.decode(outputs[0][inputs.shape[1]:], skip_special_tokens=True)
+       
+        if stop:
+            for stop_token in stop:
+                if stop_token in response:
+                    response = response.split(stop_token)[0]
+                    break
+       
+        return AIMessage(content=response)
+    
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs) -> Iterator:
+        """Streaming is not implemented for simplicity."""
+        yield self._generate(messages, stop, run_manager, **kwargs)
+# ===============================================
+# Chargement du modèle LLM local Qwen2.5-1.5B
+# ===============================================
+@st.cache_resource
+def load_local_llm_model():
+    """Charge le modèle Qwen2.5-1.5B localement dans le dossier du projet"""
+    model_name = "Qwen/Qwen2.5-1.5B-Instruct"
+    
+    # Définir le cache local dans le dossier du projet
+    local_cache_dir = os.path.join(os.getcwd(), "models", "qwen2.5-1.5b")
+    os.makedirs(local_cache_dir, exist_ok=True)
+    
+    # Récupérer le token depuis les variables d'environnement
+    hf_token = os.getenv("HF_TOKEN", "")
+    
+    # Détection GPU optimisée
+    device = 'cpu'
+    gpu_info = ""
+    if torch.cuda.is_available():
+        device = 'cuda'
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        gpu_info = f"GPU: {gpu_name} ({gpu_memory:.1f}GB VRAM)"
+        print(f"🚀 GPU détecté: {gpu_info}")
+    else:
+        print("🖥️ Utilisation du CPU")
+   
+    # Charger tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        token=hf_token if hf_token else None,
+        use_fast=True,
+        resume_download=True,
+        cache_dir=local_cache_dir
+    )
+    
+    # Corriger le problème du pad_token = eos_token pour éviter les warnings
+    if tokenizer.pad_token is None or tokenizer.pad_token == tokenizer.eos_token:
+        tokenizer.pad_token = tokenizer.eos_token
+   
+    # Configuration optimisée selon le device
+    if device == 'cuda':
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map="auto",
+            torch_dtype=torch.float16,
+            trust_remote_code=True,
+            token=hf_token if hf_token else None,
+            low_cpu_mem_usage=True,
+            resume_download=True,
+            cache_dir=local_cache_dir
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32,
+            trust_remote_code=True,
+            token=hf_token if hf_token else None,
+            low_cpu_mem_usage=True,
+            resume_download=True,
+            cache_dir=local_cache_dir
+        ).to(device)
+   
+    return tokenizer, model, device, gpu_info
 # ===============================================
 # Configuration - CHEMINS UNIFIÉS
 # ===============================================
@@ -1487,14 +1685,11 @@ def main():
         font-weight: 900;
         text-align: center;
         margin: 1rem 0;
-        background: linear-gradient(45deg, var(--kibali-green) 0%, var(--kibali-yellow) 50%, var(--kibali-blue) 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        animation: kGlow 4s ease-in-out infinite alternate, kRotate 8s linear infinite;
-        text-shadow: 0 0 30px rgba(0, 255, 136, 0.5), 0 0 60px rgba(255, 215, 0, 0.3), 0 0 90px rgba(0, 136, 255, 0.4);
+        color: black; /* Texte en noir */
         position: relative;
         display: inline-block;
+        animation: kGlowBorder 4s ease-in-out infinite alternate, kRotate 8s linear infinite;
+        text-shadow: none; /* Supprimer l'ombre du texte */
     }
 
     .kibali-k-logo::before {
@@ -1507,8 +1702,8 @@ def main():
         background: linear-gradient(45deg, var(--kibali-green), var(--kibali-yellow), var(--kibali-blue));
         border-radius: 20px;
         z-index: -1;
-        opacity: 0.1;
-        animation: kBackgroundPulse 3s ease-in-out infinite alternate;
+        opacity: 0.8;
+        animation: kBackgroundPulse 3s ease-in-out infinite alternate, kBorderShine 2s linear infinite;
     }
 
     @keyframes kGlow {
@@ -1523,6 +1718,44 @@ def main():
         100% {
             filter: brightness(1) drop-shadow(0 0 30px rgba(0, 136, 255, 0.6));
             transform: scale(1);
+        }
+    }
+
+    @keyframes kGlowBorder {
+        0% {
+            filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.8));
+        }
+        33% {
+            filter: drop-shadow(0 0 15px rgba(255, 215, 0, 0.9));
+        }
+        66% {
+            filter: drop-shadow(0 0 20px rgba(0, 136, 255, 0.8));
+        }
+        100% {
+            filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.8));
+        }
+    }
+
+    @keyframes kBorderShine {
+        0% {
+            background: linear-gradient(45deg, var(--kibali-green), var(--kibali-yellow), var(--kibali-blue));
+            opacity: 0.6;
+        }
+        25% {
+            background: linear-gradient(45deg, var(--kibali-yellow), var(--kibali-blue), var(--kibali-green));
+            opacity: 0.8;
+        }
+        50% {
+            background: linear-gradient(45deg, var(--kibali-blue), var(--kibali-green), var(--kibali-yellow));
+            opacity: 1.0;
+        }
+        75% {
+            background: linear-gradient(45deg, var(--kibali-green), var(--kibali-blue), var(--kibali-yellow));
+            opacity: 0.8;
+        }
+        100% {
+            background: linear-gradient(45deg, var(--kibali-yellow), var(--kibali-green), var(--kibali-blue));
+            opacity: 0.6;
         }
     }
 
@@ -1821,26 +2054,67 @@ def main():
         }
     }
 
-    /* Pulsing animation pour éléments importants */
-    .pulse {
-        animation: pulse 2s infinite;
+    /* Logo K pour les messages de chat */
+    .chat-k-logo {
+        display: inline-block;
+        font-size: 1.2rem;
+        font-weight: 900;
+        color: black;
+        position: relative;
+        margin-right: 0.5rem;
+        animation: chatKBorderShine 3s ease-in-out infinite;
     }
 
-    @keyframes pulse {
-        0% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0.7); }
-        70% { box-shadow: 0 0 0 10px rgba(0, 255, 136, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(0, 255, 136, 0); }
+    .chat-k-logo::before {
+        content: '';
+        position: absolute;
+        top: -2px;
+        left: -2px;
+        right: -2px;
+        bottom: -2px;
+        background: linear-gradient(45deg, var(--kibali-green), var(--kibali-yellow), var(--kibali-blue));
+        border-radius: 4px;
+        z-index: -1;
+        opacity: 0.7;
+        animation: chatKBackgroundPulse 2s ease-in-out infinite alternate;
     }
 
-    /* Glow effect pour éléments actifs */
-    .glow {
-        box-shadow: var(--shadow-glow);
-        animation: glowPulse 3s ease-in-out infinite alternate;
+    @keyframes chatKBorderShine {
+        0% {
+            filter: drop-shadow(0 0 3px rgba(0, 255, 136, 0.6));
+        }
+        33% {
+            filter: drop-shadow(0 0 5px rgba(255, 215, 0, 0.7));
+        }
+        66% {
+            filter: drop-shadow(0 0 4px rgba(0, 136, 255, 0.6));
+        }
+        100% {
+            filter: drop-shadow(0 0 3px rgba(0, 255, 136, 0.6));
+        }
     }
 
-    @keyframes glowPulse {
-        from { box-shadow: 0 0 20px rgba(0, 255, 136, 0.3); }
-        to { box-shadow: 0 0 30px rgba(0, 255, 136, 0.6); }
+    @keyframes chatKBackgroundPulse {
+        0% {
+            background: linear-gradient(45deg, var(--kibali-green), var(--kibali-yellow), var(--kibali-blue));
+            opacity: 0.5;
+        }
+        25% {
+            background: linear-gradient(45deg, var(--kibali-yellow), var(--kibali-blue), var(--kibali-green));
+            opacity: 0.7;
+        }
+        50% {
+            background: linear-gradient(45deg, var(--kibali-blue), var(--kibali-green), var(--kibali-yellow));
+            opacity: 0.8;
+        }
+        75% {
+            background: linear-gradient(45deg, var(--kibali-green), var(--kibali-blue), var(--kibali-yellow));
+            opacity: 0.7;
+        }
+        100% {
+            background: linear-gradient(45deg, var(--kibali-yellow), var(--kibali-green), var(--kibali-blue));
+            opacity: 0.5;
+        }
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1892,6 +2166,17 @@ def main():
         st.session_state.last_traj_info = None
     if 'last_reponse' not in st.session_state:
         st.session_state.last_reponse = ""
+    # Initialisation du modèle local
+    if 'local_mode' not in st.session_state:
+        st.session_state.local_mode = False
+    if 'local_model_loaded' not in st.session_state:
+        st.session_state.local_model_loaded = False
+    if 'local_tokenizer' not in st.session_state:
+        st.session_state.local_tokenizer = None
+    if 'local_model' not in st.session_state:
+        st.session_state.local_model = None
+    if 'local_qwen_llm' not in st.session_state:
+        st.session_state.local_qwen_llm = None
     # Initialisation du système d'outils dynamiques
     if 'tool_manager' not in st.session_state:
         if TOOLS_SYSTEM_AVAILABLE:
@@ -2027,6 +2312,28 @@ def main():
         with col2:
             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
             web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, help="Active la recherche web pour des réponses plus complètes")
+            # Toggle pour le mode local
+            local_mode_toggle = st.checkbox(
+                "🏠 **Mode Local (Qwen 1.5B)**", 
+                value=st.session_state.local_mode, 
+                help="Active le modèle local Qwen 1.5B pour les tâches complexes quand l'API est surchargée"
+            )
+            if local_mode_toggle != st.session_state.local_mode:
+                st.session_state.local_mode = local_mode_toggle
+                if local_mode_toggle and not st.session_state.local_model_loaded:
+                    # Charger le modèle local
+                    with st.spinner("🔄 Chargement du modèle local Qwen 1.5B..."):
+                        try:
+                            tokenizer, model, device, gpu_info = load_local_llm_model()
+                            st.session_state.local_tokenizer = tokenizer
+                            st.session_state.local_model = model
+                            st.session_state.local_qwen_llm = QwenChatModel(tokenizer, model)
+                            st.session_state.local_model_loaded = True
+                            st.success(f"✅ Modèle local chargé sur {device.upper()}")
+                        except Exception as e:
+                            st.error(f"❌ Erreur chargement modèle local: {e}")
+                            st.session_state.local_mode = False
+                st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
         
         # Zone de chat avec design amélioré
@@ -2038,7 +2345,7 @@ def main():
                 if message["role"] == "user":
                     st.markdown(f'<div class="chat-message-user"><strong>👤 Vous:</strong><br>{message["content"]}</div>', unsafe_allow_html=True)
                 else:
-                    st.markdown(f'<div class="chat-message-assistant"><strong>🤖 Kibali:</strong><br>{message["content"]}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="chat-message-assistant"><strong><span class="chat-k-logo">K</span> Kibali:</strong><br>{message["content"]}</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
         
         # Input de chat stylisé
@@ -2047,54 +2354,96 @@ def main():
             
             # Animation de chargement
             with st.spinner("🤔 Kibali réfléchit..."):
-                # Utilisation du système d'outils dynamiques si disponible
-                if st.session_state.tool_manager and TOOLS_SYSTEM_AVAILABLE:
+                # Vérifier si on utilise le mode local
+                if st.session_state.local_mode and st.session_state.local_model_loaded:
+                    # Utiliser le modèle local Qwen
                     try:
-                        # Analyse de la requête et sélection des outils appropriés
-                        selected_tools = st.session_state.tool_manager.get_relevant_tools(prompt)
+                        # Recherche RAG si disponible
+                        rag_context = ""
+                        if st.session_state.vectordb:
+                            rag_docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                            if rag_docs:
+                                rag_context = "\n\n".join([f"Document: {doc.page_content[:500]}..." for doc in rag_docs])
                         
-                        if selected_tools:
-                            st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                            st.markdown(f"🔧 **Outils sélectionnés automatiquement:** {', '.join([tool.name for tool in selected_tools])}")
-                            st.markdown('</div>', unsafe_allow_html=True)
+                        # Recherche web si activée
+                        web_context = ""
+                        if web_enabled:
+                            try:
+                                web_results = enhanced_web_search(prompt, max_results=3)
+                                if web_results:
+                                    web_context = "\n\n".join([f"Web: {r.get('title', '')} - {r.get('body', '')[:300]}" for r in web_results])
+                            except Exception as e:
+                                web_context = f"Erreur recherche web: {e}"
+                        
+                        # Construire le contexte enrichi
+                        full_context = f"CONTEXTE DISPONIBLE:\n{rag_context}{web_context}\n\nQUESTION: {prompt}"
+                        
+                        # Générer avec le modèle local
+                        response = st.session_state.local_qwen_llm._generate(
+                            [{"role": "user", "content": full_context}], 
+                            stop=None, 
+                            run_manager=None
+                        ).content
+                        
+                        # Ajouter mention du mode local
+                        response = f"🏠 **Mode Local (Qwen 1.5B)** - Réponse générée localement\n\n{response}"
+                        
+                    except Exception as e:
+                        response = f"❌ Erreur modèle local: {e}\n\nBasculement vers mode API..."
+                        # Fallback vers mode API
+                        st.session_state.local_mode = False
+                        st.rerun()
+                
+                else:
+                    # Mode API normal (code existant)
+                    # Utilisation du système d'outils dynamiques si disponible
+                    if st.session_state.tool_manager and TOOLS_SYSTEM_AVAILABLE:
+                        try:
+                            # Analyse de la requête et sélection des outils appropriés
+                            selected_tools = st.session_state.tool_manager.get_relevant_tools(prompt)
                             
-                            # Exécution des outils sélectionnés
-                            tool_results = []
-                            for tool in selected_tools:
-                                try:
-                                    result = tool.execute(prompt)
-                                    tool_results.append(f"**{tool.name}:** {result}")
-                                except Exception as e:
-                                    tool_results.append(f"**{tool.name} (erreur):** {str(e)}")
-                            
-                            # Génération de la réponse finale avec les résultats des outils
-                            context_from_tools = "\n\n".join(tool_results)
-                            
-                            # Recherche RAG si base disponible
-                            rag_context = ""
-                            if st.session_state.vectordb:
-                                rag_docs = rag_search(prompt, st.session_state.vectordb, k=2)
-                                if rag_docs:
-                                    rag_context = "\n\n".join([doc.page_content for doc in rag_docs])
-                            
-                            # Recherche web si activée
-                            web_context = ""
-                            if web_enabled:
-                                try:
-                                    web_results = enhanced_web_search(prompt, max_results=3)
-                                    if web_results:
-                                        web_context = "\n\n".join([f"{r.get('title', '')}: {r.get('body', '')}" for r in web_results])
-                                except Exception as e:
-                                    web_context = f"Erreur recherche web: {e}"
-                            
-                            # Construction du prompt final
-                            full_context = f"CONTEXTE DES OUTILS:\n{context_from_tools}"
-                            if rag_context:
-                                full_context += f"\n\nCONTEXTE DOCUMENTS:\n{rag_context}"
-                            if web_context:
-                                full_context += f"\n\nCONTEXTE WEB:\n{web_context}"
-                            
-                            final_prompt = f"""Tu es Kibali, un assistant IA avec des outils spécialisés.
+                            if selected_tools:
+                                st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                                st.markdown(f"🔧 **Outils sélectionnés automatiquement:** {', '.join([tool.name for tool in selected_tools])}")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                                
+                                # Exécution des outils sélectionnés
+                                tool_results = []
+                                for tool in selected_tools:
+                                    try:
+                                        result = tool.execute(prompt)
+                                        tool_results.append(f"**{tool.name}:** {result}")
+                                    except Exception as e:
+                                        tool_results.append(f"**{tool.name} (erreur):** {str(e)}")
+                                
+                                # Génération de la réponse finale avec les résultats des outils
+                                context_from_tools = "\n\n".join(tool_results)
+                                
+                                # Recherche RAG si base disponible
+                                rag_context = ""
+                                if st.session_state.vectordb:
+                                    rag_docs = rag_search(prompt, st.session_state.vectordb, k=2)
+                                    if rag_docs:
+                                        rag_context = "\n\n".join([doc.page_content for doc in rag_docs])
+                                
+                                # Recherche web si activée
+                                web_context = ""
+                                if web_enabled:
+                                    try:
+                                        web_results = enhanced_web_search(prompt, max_results=3)
+                                        if web_results:
+                                            web_context = "\n\n".join([f"{r.get('title', '')}: {r.get('body', '')}" for r in web_results])
+                                    except Exception as e:
+                                        web_context = f"Erreur recherche web: {e}"
+                                
+                                # Construction du prompt final
+                                full_context = f"CONTEXTE DES OUTILS:\n{context_from_tools}"
+                                if rag_context:
+                                    full_context += f"\n\nCONTEXTE DOCUMENTS:\n{rag_context}"
+                                if web_context:
+                                    full_context += f"\n\nCONTEXTE WEB:\n{web_context}"
+                                
+                                final_prompt = f"""Tu es Kibali, un assistant IA avec des outils spécialisés.
 
 {full_context}
 
@@ -2107,20 +2456,34 @@ INSTRUCTIONS:
 - Sois concis mais informatif
 
 RÉPONSE:"""
-                            
-                            # Génération de la réponse finale
-                            client = create_client()
-                            messages = [{"role": "user", "content": final_prompt}]
-                            response_obj = client.chat.completions.create(
-                                model=WORKING_MODELS[model_choice],
-                                messages=messages,
-                                max_tokens=800,
-                                temperature=0.3
-                            )
-                            response = response_obj.choices[0].message.content
-                            
-                        else:
-                            # Aucun outil spécifique trouvé, utiliser l'approche classique
+                                
+                                # Génération de la réponse finale
+                                client = create_client()
+                                messages = [{"role": "user", "content": final_prompt}]
+                                response_obj = client.chat.completions.create(
+                                    model=WORKING_MODELS[model_choice],
+                                    messages=messages,
+                                    max_tokens=800,
+                                    temperature=0.3
+                                )
+                                response = response_obj.choices[0].message.content
+                                
+                            else:
+                                # Aucun outil spécifique trouvé, utiliser l'approche classique
+                                if not web_enabled:
+                                    docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                    response = generate_answer_enhanced(
+                                        prompt, docs, WORKING_MODELS[model_choice], include_sources=True
+                                    )
+                                else:
+                                    docs = hybrid_search_enhanced(prompt, st.session_state.vectordb, k=3, web_search_enabled=True)
+                                    response = generate_answer_enhanced(
+                                        prompt, docs, WORKING_MODELS[model_choice], include_sources=True
+                                    )
+                        
+                        except Exception as e:
+                            st.error(f"Erreur système d'outils: {e}")
+                            # Fallback vers l'approche classique
                             if not web_enabled:
                                 docs = rag_search(prompt, st.session_state.vectordb, k=3)
                                 response = generate_answer_enhanced(
@@ -2132,48 +2495,34 @@ RÉPONSE:"""
                                     prompt, docs, WORKING_MODELS[model_choice], include_sources=True
                                 )
                     
-                    except Exception as e:
-                        st.error(f"Erreur système d'outils: {e}")
-                        # Fallback vers l'approche classique
-                        if not web_enabled:
-                            docs = rag_search(prompt, st.session_state.vectordb, k=3)
-                            response = generate_answer_enhanced(
-                                prompt, docs, WORKING_MODELS[model_choice], include_sources=True
+                    else:
+                        # Système d'outils non disponible, utiliser l'approche classique
+                        if st.session_state.agent is None:
+                            st.session_state.current_model = WORKING_MODELS[model_choice]
+                            st.session_state.agent = create_enhanced_agent(
+                                st.session_state.current_model, 
+                                st.session_state.vectordb, 
+                                st.session_state.graph, 
+                                st.session_state.pois
                             )
-                        else:
-                            docs = hybrid_search_enhanced(prompt, st.session_state.vectordb, k=3, web_search_enabled=True)
-                            response = generate_answer_enhanced(
-                                prompt, docs, WORKING_MODELS[model_choice], include_sources=True
-                            )
-                
-                else:
-                    # Système d'outils non disponible, utiliser l'approche classique
-                    if st.session_state.agent is None:
-                        st.session_state.current_model = WORKING_MODELS[model_choice]
-                        st.session_state.agent = create_enhanced_agent(
-                            st.session_state.current_model, 
-                            st.session_state.vectordb, 
-                            st.session_state.graph, 
-                            st.session_state.pois
-                        )
-                    
-                    try:
-                        if not web_enabled:
-                            docs = rag_search(prompt, st.session_state.vectordb, k=3)
-                            response = generate_answer_enhanced(
-                                prompt, docs, st.session_state.current_model, include_sources=True
-                            )
-                        else:
-                            response = st.session_state.agent.run(prompt)
-                    except Exception as e:
-                        response = f"❌ Erreur: {e}\n\nTentative avec recherche locale..."
+                        
                         try:
-                            docs = rag_search(prompt, st.session_state.vectordb, k=3)
-                            response = generate_answer_enhanced(
-                                prompt, docs, st.session_state.current_model
-                            )
-                        except:
-                            response = f"❌ Erreur complète: {e}"
+                            if not web_enabled:
+                                docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                response = generate_answer_enhanced(
+                                    prompt, docs, st.session_state.current_model, include_sources=True
+                                )
+                            else:
+                                response = st.session_state.agent.run(prompt)
+                        except Exception as e:
+                            response = f"❌ Erreur: {e}\n\nTentative avec recherche locale..."
+                            try:
+                                docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                response = generate_answer_enhanced(
+                                    prompt, docs, st.session_state.current_model
+                                )
+                            except:
+                                response = f"❌ Erreur complète: {e}"
             
             st.session_state.chat_history.append({"role": "assistant", "content": response})
             st.rerun()
