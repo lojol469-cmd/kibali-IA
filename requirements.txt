@@ -1,0 +1,32 @@
+streamlit
+huggingface_hub
+langchain
+sentence-transformers
+faiss-cpu
+pymupdf
+osmium
+networkx
+shapely
+matplotlib
+opencv-python-headless
+pandas
+scikit-image
+scikit-learn
+numpy
+Pillow
+scipy
+torch
+torchvision
+langchain-community
+langchain-huggingface
+requests
+beautifulsoup4
+python-dotenv
+diffusers
+accelerate
+transformers
+librosa
+soundfile
+tavily-python
+# open3d  # Not available for Python 3.13
+# flash-attn  # May not be available for Python 3.13
