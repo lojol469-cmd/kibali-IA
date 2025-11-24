@@ -296,11 +296,11 @@ def load_local_llm_model():
 # ===============================================
 # Modèles qui fonctionnent
 WORKING_MODELS = {
-    "DeepSeek V3 (Puissant)": "deepseek-ai/DeepSeek-V3-0324",
-    "Gemma 2B (Rapide)": "google/gemma-2-2b-it",
-    "Llama 3.1 8B (Équilibré)": "meta-llama/Meta-Llama-3.1-8B-Instruct",
-    "Qwen 2.5 7B (Polyvalent)": "Qwen/Qwen2.5-7B-Instruct",
-    "SmolLM 3B (Léger)": "HuggingFaceTB/SmolLM3-3B",
+    "Qwen2.5 14B (Très puissant - recommandé)": "Qwen/Qwen2.5-14B-Instruct",
+    "Qwen2.5 7B (Rapide & excellent)": "Qwen/Qwen2.5-7B-Instruct",
+    "Llama 3.2 11B (Vision + texte - Apache 2.0)": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+    "DeepSeek V3 (Le plus intelligent actuellement)": "deepseek-ai/DeepSeek-V3-0324",
+    "Mistral Nemo 12B (Français parfait)": "mistralai/Mistral-Nemo-Instruct-2407",
 }
 # TOUS LES FICHIERS DANS LE MÊME DOSSIER CHATBOT
 CHATBOT_DIR = os.path.join(os.getcwd(), "kibali_data")
@@ -1270,7 +1270,7 @@ Départ: [nom du lieu de départ]
 Arrivée: [nom du lieu d'arrivée]"""
         messages = [{"role": "user", "content": prompt}]
         response = client.chat.completions.create(
-            model=WORKING_MODELS["Llama 3.1 8B (Équilibré)"],
+            model=WORKING_MODELS["Qwen2.5 7B (Rapide & excellent)"],
             messages=messages,
             max_tokens=100,
             temperature=0.1
