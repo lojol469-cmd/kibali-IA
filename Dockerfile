@@ -4,11 +4,13 @@ WORKDIR /app
 
 # Install system dependencies for osmium and other libraries
 RUN apt-get update && apt-get install -y \
+    libexpat1 \
     libexpat1-dev \
     libboost-dev \
     libbz2-dev \
     liblz4-dev \
     libzstd-dev \
+    libosmium2-dev \
     cmake \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
