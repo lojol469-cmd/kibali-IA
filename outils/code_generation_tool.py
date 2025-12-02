@@ -4,6 +4,7 @@ Génère du code dans différents langages de programmation
 """
 
 import re
+import time
 from typing import Dict, List, Any, Optional
 from .__init__ import BaseTool
 

@@ -5,6 +5,7 @@ Effectue des calculs mathématiques avancés et résout des équations
 
 import re
 import math
+import time
 import sympy as sp
 from typing import Dict, List, Any, Optional
 from .__init__ import BaseTool

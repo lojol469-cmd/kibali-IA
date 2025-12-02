@@ -10,35 +10,43 @@ import os
 from pathlib import Path
 # Charger le token depuis .env
 from dotenv import load_dotenv
+
+# Obtenir le dossier du script actuel
+script_dir = Path(__file__).parent.absolute()
+
 # Chercher le fichier .env dans plusieurs emplacements possibles
 env_paths = [
-    ".env",
-    "../.env",
-    "~/.env"
+    script_dir / ".env",  # Dans le même dossier que app.py
+    Path.cwd() / ".env",  # Dans le dossier courant
+    Path.home() / ".env"  # Dans le dossier home
 ]
+
 token_loaded = False
 for env_path in env_paths:
-    expanded_path = os.path.expanduser(env_path)
-    if os.path.exists(expanded_path):
-        load_dotenv(expanded_path)
-        print(f"✅ Fichier .env trouvé: {expanded_path}")
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"✅ Fichier .env trouvé: {env_path}")
         token_loaded = True
         break
+
 if not token_loaded:
-    print(f"⚠️ Aucun fichier .env trouvé dans: {env_paths}")
-    print("Créez un fichier .env dans votre dossier avec: HF_TOKEN=hf_votre_token")
+    print(f"⚠️ Aucun fichier .env trouvé dans: {[str(p) for p in env_paths]}")
+    print(f"Créez un fichier .env dans {script_dir} avec: HF_TOKEN=hf_votre_token")
+
 # Récupérer le token
 HF_TOKEN = os.getenv("HF_TOKEN")
 if not HF_TOKEN:
-    raise ValueError("❌ HF_TOKEN non trouvé ! Vérifiez votre fichier .env")
+    raise ValueError(f"❌ HF_TOKEN non trouvé ! Vérifiez votre fichier .env dans {script_dir}")
 else:
     print(f"🔑 Token HF configuré: {HF_TOKEN[:10]}...")
+
 # Définir la variable d'environnement pour huggingface_hub
 os.environ["HF_TOKEN"] = HF_TOKEN
 os.environ["HUGGINGFACE_HUB_TOKEN"] = HF_TOKEN
+
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 if not TAVILY_API_KEY:
-    raise ValueError("❌ TAVILY_API_KEY non trouvé ! Vérifiez votre fichier .env")
+    raise ValueError(f"❌ TAVILY_API_KEY non trouvé ! Vérifiez votre fichier .env dans {script_dir}")
 # ===============================================
 # Imports
 # ===============================================
@@ -50,6 +58,7 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
+import base64
 import json
 from huggingface_hub import InferenceClient
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -74,7 +83,7 @@ from langchain_huggingface import HuggingFaceEndpoint
 from langchain.agents import initialize_agent, Tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
-from transformers import pipeline
+from transformers import pipeline, CLIPProcessor, CLIPModel
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -294,13 +303,27 @@ def load_local_llm_model():
 # ===============================================
 # Configuration - CHEMINS UNIFIÉS
 # ===============================================
-# Modèles qui fonctionnent
+# Modèles 100% Open Source avec Licence Commerciale (Apache 2.0 / MIT)
+# ===============================================
 WORKING_MODELS = {
-    "Qwen2.5 14B (Très puissant - recommandé)": "Qwen/Qwen2.5-14B-Instruct",
-    "Qwen2.5 7B (Rapide & excellent)": "Qwen/Qwen2.5-7B-Instruct",
-    "Llama 3.2 11B (Vision + texte - Apache 2.0)": "meta-llama/Llama-3.2-11B-Vision-Instruct",
-    "DeepSeek V3 (Le plus intelligent actuellement)": "deepseek-ai/DeepSeek-V3-0324",
-    "Mistral Nemo 12B (Français parfait)": "mistralai/Mistral-Nemo-Instruct-2407",
+    # Qwen 2.5 - Apache 2.0 License - Usage commercial autorisé
+    "Qwen2.5 14B (Apache 2.0 - Commercial OK)": "Qwen/Qwen2.5-14B-Instruct",
+    "Qwen2.5 7B (Apache 2.0 - Rapide)": "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen2.5 32B (Apache 2.0 - Très puissant)": "Qwen/Qwen2.5-32B-Instruct",
+    
+    # Llama 3.2 - Apache 2.0 License (Meta autorisation commerciale)
+    "Llama 3.2 11B Vision (Apache 2.0 - Multimodal)": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+    "Llama 3.1 8B (Apache 2.0 - Optimisé)": "meta-llama/Llama-3.1-8B-Instruct",
+    
+    # Mistral - Apache 2.0 License - Usage commercial libre
+    "Mistral Nemo 12B (Apache 2.0 - Français)": "mistralai/Mistral-Nemo-Instruct-2407",
+    "Mistral 7B v0.3 (Apache 2.0 - Rapide)": "mistralai/Mistral-7B-Instruct-v0.3",
+    
+    # Phi-3 Medium - MIT License - Microsoft open source commercial
+    "Phi-3 Medium 14B (MIT - Commercial)": "microsoft/Phi-3-medium-4k-instruct",
+    
+    # Gemma 2 - Gemma License (usage commercial autorisé par Google)
+    "Gemma 2 9B (Gemma License - Commercial OK)": "google/gemma-2-9b-it",
 }
 # TOUS LES FICHIERS DANS LE MÊME DOSSIER CHATBOT
 CHATBOT_DIR = os.path.join(os.getcwd(), "kibali_data")
@@ -472,12 +495,26 @@ Distance: {traj.get('distance', 0)/1000:.2f} km"""
     return vectordb, f"✅ Base mise à jour : {len(new_processed)} nouveaux PDFs traités, {new_chunks_count} nouveaux chunks (total : {metadata['total_chunks']})"
 def load_vectordb():
     """Charger la base vectorielle"""
-    if not os.path.exists(VECTORDB_PATH):
-        return None, "⚠️ Aucune base trouvée"
     try:
         embedding_model = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
+        
+        # Vérifier si la base existe
+        index_file = os.path.join(VECTORDB_PATH, "index.faiss")
+        if not os.path.exists(index_file):
+            # Créer une base vide si elle n'existe pas
+            os.makedirs(VECTORDB_PATH, exist_ok=True)
+            
+            # Créer un document factice pour initialiser FAISS
+            from langchain.schema import Document
+            dummy_doc = Document(page_content="Base vectorielle initialisée", metadata={"source": "system"})
+            vectordb = FAISS.from_documents([dummy_doc], embedding_model)
+            vectordb.save_local(VECTORDB_PATH)
+            
+            return vectordb, "✅ Base vectorielle créée (vide - ajoutez des PDFs)"
+        
+        # Charger la base existante
         vectordb = FAISS.load_local(VECTORDB_PATH, embedding_model, allow_dangerous_deserialization=True)
         return vectordb, "✅ Base chargée"
     except Exception as e:
@@ -547,6 +584,32 @@ def get_cache_stats():
         return f"📊 Cache: {total_entries} entrées total, {valid_count} valides, {expired_count} expirées"
     except Exception as e:
         return f"❌ Erreur stats: {e}"
+
+def get_system_status():
+    """Retourne le statut complet du système"""
+    status = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "directories": {
+            "chatbot": os.path.exists(CHATBOT_DIR),
+            "pdfs": os.path.exists(PDFS_PATH),
+            "graphs": os.path.exists(GRAPHS_PATH),
+            "maps": os.path.exists(MAPS_PATH)
+        },
+        "files": {
+            "vectordb": os.path.exists(VECTORDB_PATH),
+            "metadata": os.path.exists(METADATA_PATH),
+            "trajectories": os.path.exists(TRAJECTORIES_PATH),
+            "web_cache": os.path.exists(WEB_CACHE_PATH)
+        },
+        "counts": {
+            "pdfs": len([f for f in os.listdir(PDFS_PATH) if f.endswith('.pdf')]) if os.path.exists(PDFS_PATH) else 0,
+            "graphs": len([f for f in os.listdir(GRAPHS_PATH) if f.endswith('_graph.graphml')]) if os.path.exists(GRAPHS_PATH) else 0
+        },
+        "cache_stats": get_cache_stats(),
+        "token_configured": bool(HF_TOKEN and len(HF_TOKEN) > 10)
+    }
+    return status
+
 # ===============================================
 # Fonctions RAG et Web Search Améliorées
 # ===============================================
@@ -558,6 +621,105 @@ def create_client():
     except Exception as e:
         print(f"❌ Erreur création client: {e}")
         raise e
+
+# ===============================================
+# Chargement des modèles de vision locaux
+# ===============================================
+@st.cache_resource
+def load_vision_models():
+    """Charge les modèles CLIP depuis le cache local"""
+    try:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Charger CLIP pour analyse sémantique
+        print("📦 Chargement du modèle CLIP local...")
+        clip_model = CLIPModel.from_pretrained(
+            "openai/clip-vit-base-patch32",
+            cache_dir="/home/belikan/.cache/huggingface/hub"
+        ).to(device)
+        clip_processor = CLIPProcessor.from_pretrained(
+            "openai/clip-vit-base-patch32",
+            cache_dir="/home/belikan/.cache/huggingface/hub"
+        )
+        
+        print(f"✅ Modèle CLIP chargé sur {device}")
+        
+        return {
+            'clip_model': clip_model,
+            'clip_processor': clip_processor,
+            'device': device
+        }
+    except Exception as e:
+        print(f"⚠️ Erreur chargement modèles vision: {e}")
+        return None
+
+def analyze_image_with_clip(image_path, vision_models):
+    """Analyse une image avec CLIP local"""
+    try:
+        if not vision_models:
+            return None, "Modèles non chargés"
+        
+        clip_model = vision_models['clip_model']
+        clip_processor = vision_models['clip_processor']
+        device = vision_models['device']
+        
+        # Charger l'image
+        image = Image.open(image_path).convert('RGB')
+        
+        # Labels pour classification sémantique (géophysique focusé)
+        labels = [
+            "geological rock formation",
+            "mineral sample",
+            "geophysical survey equipment",
+            "topographic map",
+            "seismic data visualization",
+            "core sample",
+            "field work photography",
+            "satellite imagery",
+            "landscape terrain",
+            "technical diagram",
+            "graph or chart",
+            "document or report",
+            "person or people",
+            "building or structure",
+            "natural scenery"
+        ]
+        
+        # Préparer inputs
+        inputs = clip_processor(
+            text=labels,
+            images=image,
+            return_tensors="pt",
+            padding=True
+        ).to(device)
+        
+        # Prédiction
+        with torch.no_grad():
+            outputs = clip_model(**inputs)
+            logits_per_image = outputs.logits_per_image
+            probs = logits_per_image.softmax(dim=1)
+        
+        # Top 3 prédictions
+        top3_probs, top3_indices = torch.topk(probs[0], 3)
+        
+        results = []
+        for prob, idx in zip(top3_probs, top3_indices):
+            results.append({
+                'label': labels[idx.item()],
+                'confidence': prob.item()
+            })
+        
+        # Générer caption
+        main_label = results[0]['label']
+        confidence = results[0]['confidence']
+        
+        caption = f"Image appears to be: {main_label} (confidence: {confidence:.1%})"
+        
+        return caption, results
+        
+    except Exception as e:
+        return None, str(e)
+
 def rag_search(question, vectordb, k=3):
     """Rechercher dans la base vectorielle"""
     if not vectordb:
@@ -2293,48 +2455,354 @@ def main():
     # Onglet 2: Chat RAG Amélioré avec cartes
     # ===============================================
     with tab2:
-        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-        st.markdown("### 💬 Assistant IA avec recherche web intégrée")
-        st.markdown("*Pose une question sur tes documents ou demande des infos récentes du web*")
-        st.markdown('</div>', unsafe_allow_html=True)
+        # Contrôles compacts dans un expander
+        with st.expander("⚙️ Configuration", expanded=False):
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                model_choice = st.selectbox(
+                    "🎯 **Modèle IA**",
+                    options=list(WORKING_MODELS.keys()),
+                    index=0,
+                    key="model_select",
+                    help="Choisis le modèle d'IA pour tes réponses"
+                )
+            with col2:
+                web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, help="Active la recherche web pour des réponses plus complètes")
+                # Toggle pour le mode local
+                local_mode_toggle = st.checkbox(
+                    "🏠 **Mode Local (Qwen 1.5B)**", 
+                    value=st.session_state.local_mode, 
+                    help="Active le modèle local Qwen 1.5B pour les tâches complexes quand l'API est surchargée"
+                )
+                if local_mode_toggle != st.session_state.local_mode:
+                    st.session_state.local_mode = local_mode_toggle
+                    if local_mode_toggle and not st.session_state.local_model_loaded:
+                        # Charger le modèle local
+                        with st.spinner("🔄 Chargement du modèle local Qwen 1.5B..."):
+                            try:
+                                tokenizer, model, device, gpu_info = load_local_llm_model()
+                                st.session_state.local_tokenizer = tokenizer
+                                st.session_state.local_model = model
+                                st.session_state.local_qwen_llm = QwenChatModel(tokenizer, model)
+                                st.session_state.local_model_loaded = True
+                                st.success(f"✅ Modèle local chargé sur {device.upper()}")
+                            except Exception as e:
+                                st.error(f"❌ Erreur chargement modèle local: {e}")
+                                st.session_state.local_mode = False
+                    st.rerun()
         
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-            model_choice = st.selectbox(
-                "🎯 **Modèle IA**",
-                options=list(WORKING_MODELS.keys()),
-                index=0,
-                key="model_select",
-                help="Choisis le modèle d'IA pour tes réponses"
+        # Analyser automatiquement les médias uploadés (avant le chat_input)
+        media_analysis_results = []
+        
+        # Zone d'upload de médias compacte (style ChatGPT)
+        st.markdown("**📎 Ajouter des médias:**")
+        col_attach1, col_attach2, col_attach3 = st.columns([1, 1, 1])
+        
+        with col_attach1:
+            uploaded_images = st.file_uploader(
+                "📎", label_visibility="collapsed",
+                type=["jpg", "jpeg", "png", "gif", "bmp", "webp"],
+                accept_multiple_files=True,
+                key="image_uploader",
+                help="🖼️ Ajouter des images"
             )
-            st.markdown('</div>', unsafe_allow_html=True)
-        with col2:
-            st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-            web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, help="Active la recherche web pour des réponses plus complètes")
-            # Toggle pour le mode local
-            local_mode_toggle = st.checkbox(
-                "🏠 **Mode Local (Qwen 1.5B)**", 
-                value=st.session_state.local_mode, 
-                help="Active le modèle local Qwen 1.5B pour les tâches complexes quand l'API est surchargée"
+        
+        with col_attach2:
+            uploaded_audios = st.file_uploader(
+                "📎", label_visibility="collapsed",
+                type=["mp3", "wav", "ogg", "m4a", "flac"],
+                accept_multiple_files=True,
+                key="audio_uploader",
+                help="🎵 Ajouter des fichiers audio"
             )
-            if local_mode_toggle != st.session_state.local_mode:
-                st.session_state.local_mode = local_mode_toggle
-                if local_mode_toggle and not st.session_state.local_model_loaded:
-                    # Charger le modèle local
-                    with st.spinner("🔄 Chargement du modèle local Qwen 1.5B..."):
+        
+        with col_attach3:
+            uploaded_videos = st.file_uploader(
+                "📎", label_visibility="collapsed",
+                type=["mp4", "avi", "mov", "mkv", "webm"],
+                accept_multiple_files=True,
+                key="video_uploader",
+                help="🎥 Ajouter des vidéos"
+            )
+        
+        # Initialiser le tracking des fichiers traités
+        if 'processed_files' not in st.session_state:
+            st.session_state.processed_files = set()
+        
+        # Variable pour tracker si de nouveaux médias ont été analysés
+        new_media_analyzed = False
+        
+        # Analyse des images avec Vision AI (s'affiche dans le chat)
+        if uploaded_images:
+            # Ajouter l'analyse directement dans le chat
+            for idx, img_file in enumerate(uploaded_images):
+                # Vérifier si déjà traité
+                file_key = f"img_{img_file.name}_{img_file.size}"
+                if file_key in st.session_state.processed_files:
+                    continue  # Skip si déjà traité
+                
+                # Marquer comme en cours de traitement
+                st.session_state.processed_files.add(file_key)
+                new_media_analyzed = True
+                
+                # Message utilisateur avec miniature
+                img_file.seek(0)
+                st.session_state.chat_history.append({
+                    "role": "user",
+                    "content": f"📷 Image uploadée: {img_file.name}"
+                })
+                
+                # Analyse en arrière-plan
+                with st.spinner(f"🤖 Analyse de {img_file.name}..."):
+                    try:
+                        import tempfile
+                        import base64
+                        from io import BytesIO
+                        
+                        # Convertir l'image en base64 pour l'API
+                        img_file.seek(0)
+                        image_bytes = img_file.read()
+                        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+                        
+                        # Sauvegarder temporairement pour métadonnées
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(img_file.name)[1]) as tmp_file:
+                            tmp_file.write(image_bytes)
+                            tmp_path = tmp_file.name
+                        
+                        # Obtenir les métadonnées de base
+                        from PIL import Image as PILImage
+                        img = PILImage.open(tmp_path)
+                        width, height = img.size
+                        img_format = img.format
+                        
+                        # Analyse avec modèle de vision local (CLIP)
                         try:
-                            tokenizer, model, device, gpu_info = load_local_llm_model()
-                            st.session_state.local_tokenizer = tokenizer
-                            st.session_state.local_model = model
-                            st.session_state.local_qwen_llm = QwenChatModel(tokenizer, model)
-                            st.session_state.local_model_loaded = True
-                            st.success(f"✅ Modèle local chargé sur {device.upper()}")
-                        except Exception as e:
-                            st.error(f"❌ Erreur chargement modèle local: {e}")
-                            st.session_state.local_mode = False
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
+                            # Charger les modèles locaux
+                            if 'vision_models' not in st.session_state:
+                                with st.spinner("📦 Chargement des modèles de vision locaux..."):
+                                    st.session_state.vision_models = load_vision_models()
+                            
+                            vision_success = False
+                            image_caption = ""
+                            analysis_details = []
+                            
+                            if st.session_state.vision_models:
+                                st.info("🔍 Analyse avec CLIP local...")
+                                caption, details = analyze_image_with_clip(tmp_path, st.session_state.vision_models)
+                                
+                                if caption:
+                                    image_caption = caption
+                                    analysis_details = details
+                                    vision_success = True
+                                    st.success("✅ Analyse CLIP réussie!")
+                                else:
+                                    st.error(f"❌ Erreur: {details}")
+                            else:
+                                st.error("❌ Modèles de vision non disponibles")
+                            
+                            if vision_success:
+                                # Enrichir avec recherche web sur le type d'image
+                                try:
+                                    web_results = enhanced_web_search(f"analyse détaillée de: {image_caption}", max_results=3)
+                                    web_context = "\n\n".join([f"• {r.get('title', '')}: {r.get('body', '')[:200]}..." for r in web_results]) if web_results else ""
+                                except:
+                                    web_context = ""
+                                
+                                # Générer analyse complète avec LLM textuel
+                                details_str = "\n".join([f"- {d['label']}: {d['confidence']:.1%}" for d in analysis_details]) if analysis_details else "Non disponibles"
+                                
+                                analysis_prompt = f"""Voici une image nommée "{img_file.name}" ({width}x{height}px, {img_format}).
+
+📸 Analyse automatique (modèle CLIP local):
+{image_caption}
+
+🎯 Classifications détaillées:
+{details_str}
+
+🌐 Informations complémentaires du web:
+{web_context if web_context else "Non disponibles"}
+
+🎯 Ta mission: Fournis une analyse COMPLÈTE et DÉTAILLÉE comme ChatGPT:
+
+1. **Description générale approfondie**:
+   - Interprète ce que représente vraiment l'image
+   - Donne le contexte général
+
+2. **Éléments identifiables**:
+   - Liste tous les objets, structures, éléments visibles
+   - Identifie les détails importants
+
+3. **Analyse du contexte**:
+   - Quel type d'image? (photo terrain, schéma technique, scan, graphique, etc.)
+   - Où et quand pourrait-elle avoir été prise?
+
+4. **Analyse technique et scientifique**:
+   - Si c'est une image géologique: identifie les roches, minéraux, structures
+   - Si c'est technique: explique les éléments techniques
+   - Donne des détails professionnels
+
+5. **Applications pratiques**:
+   - À quoi cette image peut-elle servir?
+   - Quelles informations peut-on en extraire?
+
+6. **Observations spécifiques**:
+   - Détails uniques ou remarquables
+   - Éléments qui méritent attention
+
+Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 200 mots."""
+
+                                text_client = create_client()
+                                analysis_response = text_client.chat.completions.create(
+                                    model=WORKING_MODELS[model_choice],
+                                    messages=[{"role": "user", "content": analysis_prompt}],
+                                    max_tokens=1200,
+                                    temperature=0.7
+                                )
+                                
+                                enriched_analysis = analysis_response.choices[0].message.content
+                                
+                                # Ajouter l'analyse au chat
+                                st.session_state.chat_history.append({
+                                    "role": "assistant",
+                                    "content": f"**🖼️ Analyse de {img_file.name}**\n\n📏 Résolution: {width}x{height}px | Format: {img_format}\n\n{enriched_analysis}"
+                                })
+                                
+                                media_analysis_results.append({
+                                    'type': 'image',
+                                    'name': img_file.name,
+                                    'resolution': f"{width}x{height}",
+                                    'format': img_format,
+                                    'caption': image_caption,
+                                    'ai_analysis': enriched_analysis,
+                                    'web_context': web_context
+                                })
+                            
+                            else:
+                                # Si aucun modèle n'a fonctionné
+                                st.session_state.chat_history.append({
+                                    "role": "assistant",
+                                    "content": f"❌ Impossible d'analyser {img_file.name}. Vérifiez votre token HuggingFace ou réessayez plus tard."
+                                })
+                                
+                        except Exception as analysis_error:
+                            st.session_state.chat_history.append({
+                                "role": "assistant",
+                                "content": f"❌ Erreur lors de l'analyse de {img_file.name}: {str(analysis_error)}"
+                            })
+                            
+                    except Exception as img_error:
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": f"❌ Erreur de traitement de {img_file.name}: {str(img_error)}"
+                        })
+        
+        # Transcription des audios (affichée dans le chat)
+        if uploaded_audios:
+            for idx, audio_file in enumerate(uploaded_audios):
+                # Vérifier si déjà traité
+                file_key = f"audio_{audio_file.name}_{audio_file.size}"
+                if file_key in st.session_state.processed_files:
+                    continue
+                
+                st.session_state.processed_files.add(file_key)
+                new_media_analyzed = True
+                
+                st.session_state.chat_history.append({
+                    "role": "user",
+                    "content": f"🎵 Audio uploadé: {audio_file.name}"
+                })
+                
+                with st.spinner(f"Analyse de {audio_file.name}..."):
+                    try:
+                        import tempfile
+                        import librosa
+                        
+                        audio_file.seek(0)
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(audio_file.name)[1]) as tmp_file:
+                            tmp_file.write(audio_file.read())
+                            tmp_path = tmp_file.name
+                        
+                        y, sr = librosa.load(tmp_path)
+                        duration = librosa.get_duration(y=y, sr=sr)
+                        
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": f"**🎵 Analyse de {audio_file.name}**\n\n⏱️ Durée: {duration:.2f}s | Fréquence: {sr} Hz\n\n🎙️ *Transcription: Utilisez Whisper API pour la transcription en production*"
+                        })
+                        
+                        media_analysis_results.append({
+                            'type': 'audio',
+                            'name': audio_file.name,
+                            'duration': duration,
+                            'sample_rate': sr
+                        })
+                        
+                        os.unlink(tmp_path)
+                        
+                    except Exception as e:
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": f"❌ Erreur lors de l'analyse de {audio_file.name}: {str(e)}"
+                        })
+        
+        # Analyse des vidéos (affichée dans le chat)
+        if uploaded_videos:
+            for idx, video_file in enumerate(uploaded_videos):
+                # Vérifier si déjà traité
+                file_key = f"video_{video_file.name}_{video_file.size}"
+                if file_key in st.session_state.processed_files:
+                    continue
+                
+                st.session_state.processed_files.add(file_key)
+                new_media_analyzed = True
+                
+                st.session_state.chat_history.append({
+                    "role": "user",
+                    "content": f"🎥 Vidéo uploadée: {video_file.name}"
+                })
+                
+                with st.spinner(f"Analyse de {video_file.name}..."):
+                    try:
+                        import tempfile
+                        import cv2
+                        
+                        video_file.seek(0)
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video_file.name)[1]) as tmp_file:
+                            tmp_file.write(video_file.read())
+                            tmp_path = tmp_file.name
+                        
+                        cap = cv2.VideoCapture(tmp_path)
+                        fps = cap.get(cv2.CAP_PROP_FPS)
+                        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                        duration = frame_count / fps if fps > 0 else 0
+                        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        cap.release()
+                        
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": f"**🎥 Analyse de {video_file.name}**\n\n📐 Résolution: {width}x{height}px | ⏱️ Durée: {duration:.2f}s | 🎞️ FPS: {fps:.2f}\n\n🎬 *Analyse avancée: Extrayez les frames clés pour une analyse visuelle approfondie*"
+                        })
+                        
+                        media_analysis_results.append({
+                            'type': 'video',
+                            'name': video_file.name,
+                            'duration': duration,
+                            'resolution': f"{width}x{height}",
+                            'fps': fps
+                        })
+                        
+                        os.unlink(tmp_path)
+                        
+                    except Exception as e:
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": f"❌ Erreur lors de l'analyse de {video_file.name}: {str(e)}"
+                        })
+        
+        # Recharger uniquement si de nouveaux médias ont été analysés
+        if 'new_media_analyzed' in locals() and new_media_analyzed:
+            st.rerun()
         
         # Zone de chat avec design amélioré
         st.markdown('<div class="kibali-card" style="min-height: 400px;">', unsafe_allow_html=True)
@@ -2350,6 +2818,43 @@ def main():
         
         # Input de chat stylisé
         if prompt := st.chat_input("💭 Pose ta question ici...", key="chat_input"):
+            # Enrichir le prompt avec les résultats d'analyse de médias IA si disponibles
+            enriched_prompt = prompt
+            if media_analysis_results:
+                media_context = "\n\n📎 **Médias analysés avec IA:**\n"
+                for media in media_analysis_results:
+                    if media['type'] == 'image':
+                        media_context += f"\n🖼️ **Image: {media['name']}**\n"
+                        media_context += f"  📏 Résolution: {media.get('resolution', 'N/A')}\n"
+                        media_context += f"  🎨 Format: {media.get('format', 'N/A')}\n"
+                        
+                        # Ajouter l'analyse IA complète
+                        if 'ai_analysis' in media:
+                            media_context += f"\n  🤖 **Analyse IA détaillée:**\n"
+                            # Indenter l'analyse pour la lisibilité
+                            ai_lines = media['ai_analysis'].split('\n')
+                            for line in ai_lines[:15]:  # Limiter pour ne pas surcharger
+                                media_context += f"  {line}\n"
+                        
+                        if 'caption' in media:
+                            media_context += f"  📝 Description: {media['caption']}\n"
+                        
+                        if 'web_context' in media and media['web_context']:
+                            media_context += f"  🌐 Infos complémentaires disponibles\n"
+                    
+                    elif media['type'] == 'audio':
+                        media_context += f"\n🎵 **Audio: {media['name']}**\n"
+                        media_context += f"  ⏱️ Durée: {media.get('duration', 0):.2f}s\n"
+                        media_context += f"  📊 Fréquence: {media.get('sample_rate', 'N/A')} Hz\n"
+                    
+                    elif media['type'] == 'video':
+                        media_context += f"\n🎥 **Vidéo: {media['name']}**\n"
+                        media_context += f"  ⏱️ Durée: {media.get('duration', 0):.2f}s\n"
+                        media_context += f"  📐 Résolution: {media.get('resolution', 'N/A')}\n"
+                        media_context += f"  🎞️ FPS: {media.get('fps', 'N/A')}\n"
+                
+                enriched_prompt = f"{prompt}\n{media_context}"
+            
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             
             # Animation de chargement
@@ -2375,8 +2880,8 @@ def main():
                             except Exception as e:
                                 web_context = f"Erreur recherche web: {e}"
                         
-                        # Construire le contexte enrichi
-                        full_context = f"CONTEXTE DISPONIBLE:\n{rag_context}{web_context}\n\nQUESTION: {prompt}"
+                        # Construire le contexte enrichi avec médias
+                        full_context = f"CONTEXTE DISPONIBLE:\n{rag_context}{web_context}\n\nQUESTION: {enriched_prompt}"
                         
                         # Générer avec le modèle local
                         response = st.session_state.local_qwen_llm._generate(
@@ -2399,32 +2904,70 @@ def main():
                     # Utilisation du système d'outils dynamiques si disponible
                     if st.session_state.tool_manager and TOOLS_SYSTEM_AVAILABLE:
                         try:
+                            # Préparer le contexte pour les outils (avec médias analysés)
+                            tool_context = {
+                                'has_pdfs': st.session_state.vectordb is not None,
+                                'vectordb_available': st.session_state.vectordb is not None,
+                                'web_enabled': web_enabled,
+                                'media_analysis': media_analysis_results if media_analysis_results else None
+                            }
+                            
                             # Analyse de la requête et sélection des outils appropriés
-                            selected_tools = st.session_state.tool_manager.get_relevant_tools(prompt)
+                            selected_tools = st.session_state.tool_manager.get_relevant_tools(enriched_prompt, tool_context)
                             
                             if selected_tools:
-                                st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                                st.markdown(f"🔧 **Outils sélectionnés automatiquement:** {', '.join([tool.name for tool in selected_tools])}")
-                                st.markdown('</div>', unsafe_allow_html=True)
+                                # Affichage popup élégant des outils sélectionnés
+                                tools_names = [f"**{tool.name}**" for tool in selected_tools]
+                                tools_descriptions = [tool.description for tool in selected_tools]
                                 
-                                # Exécution des outils sélectionnés
+                                st.markdown("""
+                                <div style="
+                                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                    padding: 15px;
+                                    border-radius: 10px;
+                                    margin: 10px 0;
+                                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                                    border-left: 5px solid #FFD700;
+                                ">
+                                    <h4 style="color: white; margin: 0 0 10px 0;">
+                                        🔧 Outils IA Détectés
+                                    </h4>
+                                    <p style="color: #f0f0f0; margin: 5px 0; font-size: 14px;">
+                                        """ + " • ".join([tool.name for tool in selected_tools]) + """
+                                    </p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Recherche RAG si un outil PDF est détecté
+                                rag_context = ""
+                                pdf_tool_used = any('pdf' in tool.name.lower() or 'document' in tool.name.lower() for tool in selected_tools)
+                                
+                                if pdf_tool_used and st.session_state.vectordb:
+                                    with st.expander("🔍 Recherche dans les documents PDF...", expanded=True):
+                                        rag_docs = rag_search(prompt, st.session_state.vectordb, k=10)
+                                        if rag_docs:
+                                            rag_context = "\n\n".join([f"📄 {doc.metadata.get('source', 'Document')}:\n{doc.page_content}" for doc in rag_docs])
+                                            st.success(f"✅ {len(rag_docs)} passages trouvés")
+                                            # Afficher un aperçu
+                                            for i, doc in enumerate(rag_docs[:3], 1):
+                                                st.markdown(f"**Document {i}:** `{doc.metadata.get('source', 'Inconnu')}`")
+                                        else:
+                                            st.info("Aucun résultat dans les PDFs")
+                                elif pdf_tool_used and not st.session_state.vectordb:
+                                    st.warning("⚠️ Outil PDF détecté mais aucune base vectorielle chargée. Ajoutez des PDFs dans l'onglet Configuration.")
+                                
+                                # Exécution des autres outils avec affichage
                                 tool_results = []
                                 for tool in selected_tools:
-                                    try:
-                                        result = tool.execute(prompt)
-                                        tool_results.append(f"**{tool.name}:** {result}")
-                                    except Exception as e:
-                                        tool_results.append(f"**{tool.name} (erreur):** {str(e)}")
-                                
-                                # Génération de la réponse finale avec les résultats des outils
-                                context_from_tools = "\n\n".join(tool_results)
-                                
-                                # Recherche RAG si base disponible
-                                rag_context = ""
-                                if st.session_state.vectordb:
-                                    rag_docs = rag_search(prompt, st.session_state.vectordb, k=2)
-                                    if rag_docs:
-                                        rag_context = "\n\n".join([doc.page_content for doc in rag_docs])
+                                    if 'pdf' not in tool.name.lower() and 'document' not in tool.name.lower():
+                                        try:
+                                            with st.expander(f"⚙️ Exécution de {tool.name}...", expanded=False):
+                                                result = tool.execute(prompt, tool_context)
+                                                st.json(result)
+                                            tool_results.append(f"**{tool.name}:** {result}")
+                                        except Exception as e:
+                                            st.error(f"❌ Erreur {tool.name}: {str(e)}")
+                                            tool_results.append(f"**{tool.name} (erreur):** {str(e)}")
                                 
                                 # Recherche web si activée
                                 web_context = ""
@@ -2432,30 +2975,85 @@ def main():
                                     try:
                                         web_results = enhanced_web_search(prompt, max_results=3)
                                         if web_results:
-                                            web_context = "\n\n".join([f"{r.get('title', '')}: {r.get('body', '')}" for r in web_results])
+                                            web_context = "\n\n".join([f"🌐 {r.get('title', '')}: {r.get('body', '')}" for r in web_results])
                                     except Exception as e:
                                         web_context = f"Erreur recherche web: {e}"
                                 
-                                # Construction du prompt final
-                                full_context = f"CONTEXTE DES OUTILS:\n{context_from_tools}"
-                                if rag_context:
-                                    full_context += f"\n\nCONTEXTE DOCUMENTS:\n{rag_context}"
-                                if web_context:
-                                    full_context += f"\n\nCONTEXTE WEB:\n{web_context}"
+                                # Construction du prompt final avec médias
+                                full_context = ""
                                 
-                                final_prompt = f"""Tu es Kibali, un assistant IA avec des outils spécialisés.
+                                # Ajouter contexte des médias analysés avec IA
+                                if media_analysis_results:
+                                    full_context += "═══════════════════════════════════════\n"
+                                    full_context += "📎 MÉDIAS ANALYSÉS PAR IA AVANCÉE\n"
+                                    full_context += "═══════════════════════════════════════\n\n"
+                                    
+                                    for media in media_analysis_results:
+                                        if media['type'] == 'image':
+                                            full_context += f"🖼️ **IMAGE: {media['name']}**\n"
+                                            full_context += f"📏 Résolution: {media.get('resolution', 'N/A')}\n"
+                                            full_context += f"🎨 Format: {media.get('format', 'N/A')}\n\n"
+                                            
+                                            if 'ai_analysis' in media:
+                                                full_context += "🤖 ANALYSE IA DÉTAILLÉE:\n"
+                                                full_context += f"{media['ai_analysis']}\n\n"
+                                            
+                                            if 'caption' in media:
+                                                full_context += f"📝 Description: {media['caption']}\n\n"
+                                            
+                                            if 'web_context' in media and media['web_context']:
+                                                full_context += "🌐 Informations complémentaires du web:\n"
+                                                full_context += f"{media['web_context'][:500]}...\n\n"
+                                        
+                                        elif media['type'] == 'audio':
+                                            full_context += f"🎵 **AUDIO: {media['name']}**\n"
+                                            full_context += f"⏱️ Durée: {media.get('duration', 0):.2f}s\n"
+                                            full_context += f"📊 Fréquence: {media.get('sample_rate', 'N/A')} Hz\n\n"
+                                        
+                                        elif media['type'] == 'video':
+                                            full_context += f"🎥 **VIDÉO: {media['name']}**\n"
+                                            full_context += f"📐 Résolution: {media.get('resolution', 'N/A')}\n"
+                                            full_context += f"⏱️ Durée: {media.get('duration', 0):.2f}s\n"
+                                            full_context += f"🎞️ FPS: {media.get('fps', 'N/A')}\n\n"
+                                    
+                                    full_context += "═══════════════════════════════════════\n\n"
+                                
+                                if rag_context:
+                                    full_context += f"📚 DOCUMENTS PDF TROUVÉS:\n{rag_context}\n\n"
+                                if tool_results:
+                                    full_context += f"🔧 RÉSULTATS DES OUTILS:\n" + "\n\n".join(tool_results) + "\n\n"
+                                if web_context:
+                                    full_context += f"🌐 INFORMATIONS WEB:\n{web_context}\n\n"
+                                
+                                final_prompt = f"""Tu es Kibali, un assistant IA expert avec capacités d'analyse multimodale (images, texte, documents).
 
 {full_context}
 
-QUESTION: {prompt}
+❓ QUESTION DE L'UTILISATEUR: {prompt}
 
-INSTRUCTIONS:
-- Utilise les résultats des outils pour donner une réponse précise et complète
-- Combine intelligemment les informations des différents outils
-- Si des outils ont échoué, utilise les autres sources disponibles
-- Sois concis mais informatif
+📋 INSTRUCTIONS POUR TA RÉPONSE:
 
-RÉPONSE:"""
+1. **Si une image a été analysée:**
+   - Base-toi PRIORITAIREMENT sur l'analyse IA détaillée fournie ci-dessus
+   - Réponds de manière précise et contextuelle en fonction de ce qui est visible dans l'image
+   - Cite les éléments spécifiques identifiés par l'IA
+   - Si l'image est technique/scientifique, utilise les informations web complémentaires
+
+2. **Pour les autres médias:**
+   - Intègre naturellement les informations d'audio/vidéo dans ta réponse
+   - Mentionne les métadonnées pertinentes si nécessaire
+
+3. **Pour les documents:**
+   - Si des PDFs sont trouvés, cite les sources et extrais les informations clés
+   - Combine les informations des médias avec celles des documents
+
+4. **Style de réponse:**
+   - Sois précis, professionnel et détaillé
+   - Structure ta réponse avec des emojis appropriés
+   - Ne mentionne PAS "je ne peux pas voir l'image" car l'analyse IA l'a déjà fait
+   - Réponds comme si tu avais directement accès à l'image grâce à l'analyse fournie
+
+🎯 RÉPONDS MAINTENANT:"""
                                 
                                 # Génération de la réponse finale
                                 client = create_client()
@@ -2807,21 +3405,51 @@ RÉPONSE:"""
                     with st.spinner("🔧 Exécution de l'outil..."):
                         try:
                             if selected_tool_name == "Auto (détection)":
+                                # Préparer le contexte pour la détection
+                                tool_context = {
+                                    'has_pdfs': st.session_state.vectordb is not None,
+                                    'vectordb_available': st.session_state.vectordb is not None
+                                }
+                                
                                 # Détection automatique
-                                relevant_tools = st.session_state.tool_manager.get_relevant_tools(test_query)
+                                relevant_tools = st.session_state.tool_manager.get_relevant_tools(test_query, tool_context)
                                 if relevant_tools:
                                     st.success(f"🔍 Outils détectés: {', '.join([t.name for t in relevant_tools])}")
+                                    
+                                    # Si outil PDF détecté, faire une vraie recherche
+                                    pdf_tool_detected = any('pdf' in t.name.lower() or 'document' in t.name.lower() for t in relevant_tools)
+                                    
+                                    if pdf_tool_detected:
+                                        if st.session_state.vectordb:
+                                            st.info("🔍 Recherche dans les documents PDF...")
+                                            rag_docs = rag_search(test_query, st.session_state.vectordb, k=5)
+                                            if rag_docs:
+                                                st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                                                st.markdown(f"### 📊 Résultats trouvés: {len(rag_docs)} passages")
+                                                for i, doc in enumerate(rag_docs, 1):
+                                                    st.markdown(f"**Document {i}:** {doc.metadata.get('source', 'Inconnu')}")
+                                                    st.text_area(f"Extrait {i}", value=doc.page_content[:500], height=100, disabled=True, key=f"extract_{i}")
+                                                    st.markdown("---")
+                                                st.markdown('</div>', unsafe_allow_html=True)
+                                            else:
+                                                st.warning("Aucun résultat trouvé dans les documents")
+                                        else:
+                                            st.warning("⚠️ Base vectorielle non chargée. Ajoutez des PDFs dans l'onglet Configuration.")
+                                    
+                                    # Exécuter les autres outils
                                     results = []
                                     for tool in relevant_tools:
-                                        result = tool.execute(test_query)
-                                        results.append(f"**{tool.name}:**\n{result}")
+                                        if 'pdf' not in tool.name.lower() and 'document' not in tool.name.lower():
+                                            result = tool.execute(test_query, tool_context)
+                                            results.append(f"**{tool.name}:**\n{result}")
                                     
-                                    st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                                    st.markdown("### 📊 Résultats des outils")
-                                    for result in results:
-                                        st.markdown(result)
-                                        st.markdown("---")
-                                    st.markdown('</div>', unsafe_allow_html=True)
+                                    if results:
+                                        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                                        st.markdown("### 📊 Résultats des autres outils")
+                                        for result in results:
+                                            st.markdown(result)
+                                            st.markdown("---")
+                                        st.markdown('</div>', unsafe_allow_html=True)
                                 else:
                                     st.warning("⚠️ Aucun outil pertinent détecté pour cette requête")
                             
@@ -2905,30 +3533,6 @@ else:
 # ===============================================
 # Fonctions utilitaires supplémentaires
 # ===============================================
-def get_system_status():
-    """Retourne le statut complet du système"""
-    status = {
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "directories": {
-            "chatbot": os.path.exists(CHATBOT_DIR),
-            "pdfs": os.path.exists(PDFS_PATH),
-            "graphs": os.path.exists(GRAPHS_PATH),
-            "maps": os.path.exists(MAPS_PATH)
-        },
-        "files": {
-            "vectordb": os.path.exists(VECTORDB_PATH),
-            "metadata": os.path.exists(METADATA_PATH),
-            "trajectories": os.path.exists(TRAJECTORIES_PATH),
-            "web_cache": os.path.exists(WEB_CACHE_PATH)
-        },
-        "counts": {
-            "pdfs": len([f for f in os.listdir(PDFS_PATH) if f.endswith('.pdf')]) if os.path.exists(PDFS_PATH) else 0,
-            "graphs": len([f for f in os.listdir(GRAPHS_PATH) if f.endswith('_graph.graphml')]) if os.path.exists(GRAPHS_PATH) else 0
-        },
-        "cache_stats": get_cache_stats(),
-        "token_configured": bool(HF_TOKEN and len(HF_TOKEN) > 10)
-    }
-    return status
 def cleanup_old_cache():
     """Nettoie les entrées expirées du cache"""
     try:

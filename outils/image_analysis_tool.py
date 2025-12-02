@@ -4,6 +4,8 @@ Analyse et décrit le contenu des images avec IA
 """
 
 import re
+import os
+import time
 from typing import Dict, List, Any, Optional
 from .__init__ import BaseTool
 import cv2

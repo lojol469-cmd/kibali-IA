@@ -4,6 +4,7 @@ Traduit du texte entre différentes langues
 """
 
 import re
+import time
 from typing import Dict, List, Any, Optional
 from .__init__ import BaseTool
 
