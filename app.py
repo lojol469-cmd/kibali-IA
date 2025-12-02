@@ -1756,16 +1756,10 @@ def detect_anomalies(image: np.ndarray):
         anomalies.append("Anomalies structurelles détectées (ex. : fissures, défauts)")
     if mean_variance > 500:
         anomalies.append("Textures inhabituelles (ex. : zones irrégulières)")
-    # Simulation photogrammétrie basique avec Open3D
-    depth = np.random.rand(*gray.shape) * 255
-    point_cloud = o3d.geometry.PointCloud.create_from_rgbd_image(
-        o3d.geometry.RGBDImage.create_from_color_and_depth(
-            o3d.geometry.Image(image),
-            o3d.geometry.Image(depth.astype(np.float32))
-        ),
-        o3d.camera.PinholeCameraIntrinsic(640, 480, 525, 525, 320, 240)
-    )
-    num_points = len(point_cloud.points)
+    # Simulation photogrammétrie basique SANS Open3D (désactivé pour Python 3.13)
+    # Open3D n'est pas disponible pour Python 3.13, donc on simule autrement
+    num_points = gray.shape[0] * gray.shape[1]  # Nombre de pixels comme approximation
+    
     # Graphisme : Histogramme des variances
     fig, ax = plt.subplots()
     ax.hist(cv2.Laplacian(gray, cv2.CV_64F).ravel(), bins=50)
@@ -1773,14 +1767,14 @@ def detect_anomalies(image: np.ndarray):
     var_hist_img = fig_to_pil(fig)
     # Tableau des metrics anomalies
     anomaly_df = pd.DataFrame({
-        'Métrique': ['Nombre de Bords', 'Variance Moyenne', 'Points dans Point Cloud'],
+        'Métrique': ['Nombre de Bords', 'Variance Moyenne', 'Points Estimés'],
         'Valeur': [num_edges, mean_variance, num_points],
-        'Explication': ['Indique complexité structurelle (haut = anomalies)', 'Mesure irrégularités texture', 'Simulation 3D pour volume']
+        'Explication': ['Indique complexité structurelle (haut = anomalies)', 'Mesure irrégularités texture', 'Estimation de densité pour volume']
     })
     anomaly_html = df_to_html(anomaly_df)
     anomaly_desc_df = pd.DataFrame({
-        'Anomalie': anomalies,
-        'Explication': ['Défauts potentiels dans le terrain ou structures' for _ in anomalies]
+        'Anomalie': anomalies if anomalies else ['Aucune anomalie détectée'],
+        'Explication': ['Défauts potentiels dans le terrain ou structures' if anomalies else 'Image sans anomalies significatives']
     })
     anomaly_desc_html = df_to_html(anomaly_desc_df)
     return anomalies, var_hist_img, anomaly_html, anomaly_desc_html
@@ -2474,16 +2468,16 @@ def main():
     # ===============================================
     # Onglets avec design fluide
     # ===============================================
-    tab_names = ["⚙️ **Configuration**", "💬 **Chat RAG + Web**", "🗺️ **Trajets**", "📸 **Analyse Image**", "🌐 **Recherche Web**"]
+    tab_names = ["⚙️ **Configuration**", "💬 **Chat RAG + Web**", "🗺️ **Trajets**", "📸 **Analyse Image**", "🌐 **Recherche Web**", "📷 **Photogrammétrie**"]
     if TOOLS_SYSTEM_AVAILABLE and st.session_state.tool_manager:
         tab_names.append("🔧 **Outils Dynamiques**")
     
     tabs = st.tabs(tab_names)
     
     # Assignation des onglets
-    tab1, tab2, tab3, tab4, tab5 = tabs[:5]
-    if len(tabs) > 5:
-        tab6 = tabs[5]
+    tab1, tab2, tab3, tab4, tab5, tab_photo = tabs[:6]
+    if len(tabs) > 6:
+        tab6 = tabs[6]
 
     # ===============================================
     # Onglet 1: Configuration avec cartes
@@ -3393,13 +3387,13 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                     st.warning("⚠️ Aucun trajet à sauvegarder - Calcule un trajet d'abord")
 
     # ===============================================
-    # Onglet 4: Analyse Image avec cartes
+    # Onglet 4: Analyse Image avec IA avancée
     # ===============================================
     with tab4:
         st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
         st.markdown("""
-        ### 📸 Analyse d'images avancée
-        Upload une image pour analyse détaillée avec IA, annotations, graphiques et amélioration automatique.
+        ### 📸 Analyse d'images avancée avec IA
+        Upload une image pour analyse complète: Vision AI (CLIP), OCR, détection d'objets, annotations et graphiques.
         """)
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -3415,27 +3409,116 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
         if st.button("🔍 **Analyser l'image**", key="analyze_image", help="Lance l'analyse complète de l'image avec IA"):
             if uploaded_image:
                 with st.spinner("🔬 Analyse IA en cours..."):
+                    # 1. Analyse traditionnelle (OpenCV)
                     analysis_data, proc_images, tables_str = process_image(uploaded_image.getvalue())
-                    improved_analysis = improve_analysis_with_llm(analysis_data, st.session_state.current_model)
                     
-                    # Afficher les images avec zoom au survol
+                    # 2. Analyse avancée avec Vision AI (CLIP) + OCR
+                    st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                    st.markdown("### 🤖 Analyse Vision AI + OCR")
+                    
+                    try:
+                        # Charger les modèles Vision
+                        with st.spinner("📥 Chargement des modèles Vision AI..."):
+                            clip_model, clip_processor = load_vision_models()
+                        
+                        # Sauvegarder l'image temporairement
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+                            tmp_file.write(uploaded_image.getvalue())
+                            tmp_path = tmp_file.name
+                        
+                        # Charger le reader OCR
+                        with st.spinner("📝 Chargement du moteur OCR..."):
+                            ocr_reader = load_ocr_reader()
+                        
+                        # Extraire le texte (OCR)
+                        with st.spinner("🔍 Extraction du texte..."):
+                            extracted_texts = extract_text_from_image(tmp_path, ocr_reader)
+                        
+                        # Afficher le texte extrait
+                        if extracted_texts:
+                            st.markdown("#### 📝 Texte extrait de l'image")
+                            organized_text = organize_extracted_text(extracted_texts)
+                            st.text_area("Texte détecté", value=organized_text, height=200, disabled=True)
+                        else:
+                            st.info("ℹ️ Aucun texte détecté dans l'image")
+                        
+                        # Analyser avec CLIP
+                        with st.spinner("🎨 Analyse sémantique (CLIP)..."):
+                            image_pil = Image.open(tmp_path)
+                            clip_analysis = analyze_image_with_clip(image_pil, clip_model, clip_processor)
+                        
+                        # Afficher les résultats CLIP
+                        st.markdown("#### 🎯 Analyse sémantique (catégories détectées)")
+                        
+                        # Créer un DataFrame pour les catégories
+                        import pandas as pd
+                        categories_df = pd.DataFrame({
+                            'Catégorie': list(clip_analysis.keys()),
+                            'Score de confiance': [f"{v*100:.1f}%" for v in clip_analysis.values()]
+                        })
+                        st.dataframe(categories_df, use_container_width=True)
+                        
+                        # Visualisation graphique
+                        fig, ax = plt.subplots(figsize=(10, 6))
+                        categories = list(clip_analysis.keys())
+                        scores = [v * 100 for v in clip_analysis.values()]
+                        colors = ['#2E7D32' if s > 50 else '#FFA726' if s > 30 else '#EF5350' for s in scores]
+                        ax.barh(categories, scores, color=colors)
+                        ax.set_xlabel('Score de confiance (%)')
+                        ax.set_title('Analyse sémantique de l\'image')
+                        ax.set_xlim(0, 100)
+                        st.pyplot(fig)
+                        
+                        # Nettoyer le fichier temporaire
+                        import os
+                        os.unlink(tmp_path)
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors de l'analyse Vision AI: {str(e)}")
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    # 3. Afficher les images traditionnelles avec zoom au survol
+                    st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                    st.markdown("### 📊 Analyses traditionnelles (OpenCV)")
                     if proc_images:
                         cols = st.columns(min(len(proc_images), 3))
                         for i, (img, caption) in enumerate(zip(proc_images, ['Image Originale'] + ['Analyse'] * (len(proc_images)-1))):
                             with cols[i % len(cols)]:
-                                st.markdown('<div class="kibali-card zoom-image">', unsafe_allow_html=True)
+                                st.markdown('<div class="zoom-image">', unsafe_allow_html=True)
                                 st.image(img, caption=f"📸 {caption}", use_column_width=True)
                                 st.markdown('</div>', unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
                     
-                    # Afficher les tableaux d'analyse
+                    # 4. Afficher les tableaux d'analyse
                     if tables_str:
                         st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
                         st.markdown(tables_str, unsafe_allow_html=True)
                         st.markdown('</div>', unsafe_allow_html=True)
                     
-                    # Analyse améliorée par IA
+                    # 5. Génération de rapport complet avec LLM
                     st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                    st.text_area("🤖 **Analyse améliorée (IA)**", value=improved_analysis, height=300, disabled=True)
+                    st.markdown("### 🤖 Rapport d'analyse IA complet")
+                    
+                    with st.spinner("✍️ Génération du rapport détaillé..."):
+                        # Combiner toutes les informations
+                        combined_info = f"""
+Analyse de l'image uploadée:
+
+### Vision AI (CLIP):
+{chr(10).join([f"- {cat}: {score*100:.1f}%" for cat, score in clip_analysis.items()])}
+
+### Texte extrait (OCR):
+{organized_text if extracted_texts else "Aucun texte détecté"}
+
+### Analyses techniques (OpenCV):
+{analysis_data}
+"""
+                        
+                        improved_analysis = improve_analysis_with_llm(combined_info, st.session_state.current_model)
+                        st.text_area("📋 Rapport complet", value=improved_analysis, height=400, disabled=True)
+                    
                     st.markdown('</div>', unsafe_allow_html=True)
             else:
                 st.warning("⚠️ Veuillez uploader une image d'abord")
@@ -3512,9 +3595,163 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ===============================================
-    # Onglet 6: Outils Dynamiques (si disponible)
+    # Onglet 6: Photogrammétrie - Optimisation de datasets
     # ===============================================
-    if TOOLS_SYSTEM_AVAILABLE and st.session_state.tool_manager and len(tabs) > 5:
+    with tab_photo:
+        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+        st.markdown("""
+        ### 📷 Optimisation de Datasets de Photogrammétrie
+        **Réduisez intelligemment vos photos tout en conservant la couverture complète.**
+        
+        Uploadez plusieurs photos (drone, aériennes, terrestres) et l'outil sélectionne 
+        automatiquement les images essentielles qui couvrent tous les angles.
+        """)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Section d'upload multiple
+        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+        st.markdown("#### 📤 Upload de photos")
+        
+        uploaded_photos = st.file_uploader(
+            "Sélectionnez vos photos de photogrammétrie",
+            type=['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'tif'],
+            accept_multiple_files=True,
+            help="Uploadez toutes vos photos. Plus il y en a, plus la réduction sera significative!"
+        )
+        
+        if uploaded_photos and len(uploaded_photos) > 0:
+            st.success(f"✅ {len(uploaded_photos)} photos chargées")
+            
+            # Paramètres d'optimisation
+            col_param1, col_param2 = st.columns(2)
+            with col_param1:
+                target_count = st.number_input(
+                    "🎯 Nombre cible de photos (0 = automatique)",
+                    min_value=0,
+                    max_value=len(uploaded_photos),
+                    value=0,
+                    help="Laissez 0 pour une détection automatique du nombre optimal"
+                )
+            
+            with col_param2:
+                coverage_threshold = st.slider(
+                    "📊 Couverture minimale requise",
+                    min_value=0.8,
+                    max_value=1.0,
+                    value=0.95,
+                    step=0.05,
+                    help="Pourcentage de la scène qui doit être couvert (0.95 = 95%)"
+                )
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Bouton d'optimisation
+            if st.button("🚀 **Optimiser le dataset**", type="primary", use_container_width=True):
+                with st.spinner("🔍 Analyse des photos en cours..."):
+                    try:
+                        import tempfile
+                        import shutil
+                        from pathlib import Path
+                        
+                        # Créer un dossier temporaire pour les photos
+                        temp_dir = tempfile.mkdtemp(prefix="photogrammetry_")
+                        
+                        # Sauvegarder les photos uploadées
+                        st.info(f"💾 Sauvegarde de {len(uploaded_photos)} photos...")
+                        for idx, photo in enumerate(uploaded_photos):
+                            photo_path = Path(temp_dir) / photo.name
+                            with open(photo_path, 'wb') as f:
+                                f.write(photo.getbuffer())
+                        
+                        # Importer l'outil
+                        from outils.photogrammetry_optimizer_tool import PhotogrammetryOptimizerTool
+                        
+                        # Exécuter l'optimisation
+                        tool = PhotogrammetryOptimizerTool()
+                        context = {
+                            'input_folder': temp_dir,
+                            'target_count': target_count if target_count > 0 else None,
+                            'coverage_threshold': coverage_threshold,
+                            'similarity_threshold': 0.85
+                        }
+                        
+                        result = tool.execute("", context=context)
+                        
+                        # Afficher les résultats
+                        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                        st.markdown("### 📊 Résultats de l'optimisation")
+                        st.text(result)
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Proposer le téléchargement des photos sélectionnées
+                        output_folder = Path(temp_dir + "_optimized")
+                        if output_folder.exists():
+                            st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                            st.markdown("### 📥 Téléchargement des photos optimisées")
+                            
+                            # Créer un ZIP
+                            import zipfile
+                            zip_path = Path(temp_dir) / "photos_optimized.zip"
+                            
+                            with zipfile.ZipFile(zip_path, 'w') as zipf:
+                                for photo_file in output_folder.glob("*.*"):
+                                    if photo_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']:
+                                        zipf.write(photo_file, arcname=photo_file.name)
+                            
+                            # Bouton de téléchargement
+                            with open(zip_path, 'rb') as f:
+                                st.download_button(
+                                    label="📦 Télécharger les photos sélectionnées (ZIP)",
+                                    data=f.read(),
+                                    file_name="photos_photogrammetrie_optimisees.zip",
+                                    mime="application/zip"
+                                )
+                            
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Nettoyage (optionnel, garder pour debug)
+                        # shutil.rmtree(temp_dir, ignore_errors=True)
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors de l'optimisation: {str(e)}")
+                        import traceback
+                        st.text(traceback.format_exc())
+        
+        else:
+            st.info("👆 Uploadez vos photos pour commencer l'optimisation")
+            
+            # Exemples d'utilisation
+            st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+            st.markdown("""
+            #### 💡 Exemples d'utilisation
+            
+            **Photogrammétrie aérienne:**
+            - Upload: 500-1000 photos drone
+            - Résultat: 15-30 photos essentielles
+            - Réduction: ~97%
+            
+            **Scan d'objet 3D:**
+            - Upload: 200 photos multi-angles
+            - Résultat: 10-20 photos représentatives
+            - Réduction: ~90%
+            
+            **Cartographie terrain:**
+            - Upload: 1000+ photos aériennes
+            - Résultat: 20-50 photos de couverture
+            - Réduction: ~95%
+            
+            #### 🎯 Algorithme
+            1. **Extraction de features** (ORB, histogrammes, textures)
+            2. **Clustering intelligent** (KMeans sur angles de vue)
+            3. **Sélection optimale** (représentants par cluster)
+            4. **Vérification de couverture** (ajout si zones manquantes)
+            """)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    # ===============================================
+    # Onglet 7: Outils Dynamiques (si disponible)
+    # ===============================================
+    if TOOLS_SYSTEM_AVAILABLE and st.session_state.tool_manager and len(tabs) > 6:
         with tab6:
             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
             st.markdown("""
