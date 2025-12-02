@@ -30,5 +30,6 @@ transformers
 librosa
 soundfile
 tavily-python
+easyocr
 # open3d  # Not available for Python 3.13
 # flash-attn  # May not be available for Python 3.13

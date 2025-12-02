@@ -88,6 +88,14 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import shutil
+try:
+    import easyocr
+except ImportError:
+    easyocr = None
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
 from diffusers import DiffusionPipeline, AudioLDMPipeline, ShapEPipeline, ShapEImg2ImgPipeline
 import imageio
 import scipy.io.wavfile as wavfile
@@ -652,6 +660,118 @@ def load_vision_models():
     except Exception as e:
         print(f"⚠️ Erreur chargement modèles vision: {e}")
         return None
+
+@st.cache_resource
+def load_ocr_reader():
+    """Charge le lecteur OCR EasyOCR"""
+    try:
+        if easyocr:
+            print("📦 Chargement du modèle OCR EasyOCR...")
+            reader = easyocr.Reader(['fr', 'en'], gpu=torch.cuda.is_available())
+            print("✅ Modèle OCR chargé")
+            return reader
+        else:
+            print("⚠️ EasyOCR non installé")
+            return None
+    except Exception as e:
+        print(f"⚠️ Erreur chargement OCR: {e}")
+        return None
+
+def extract_text_from_image(image_path, ocr_reader=None):
+    """Extrait le texte d'une image avec OCR"""
+    extracted_texts = []
+    
+    try:
+        # Méthode 1: EasyOCR (meilleur pour textes complexes)
+        if ocr_reader:
+            results = ocr_reader.readtext(image_path)
+            for (bbox, text, confidence) in results:
+                if confidence > 0.3:  # Seuil de confiance
+                    extracted_texts.append({
+                        'text': text,
+                        'confidence': confidence,
+                        'bbox': bbox,
+                        'method': 'EasyOCR'
+                    })
+        
+        # Méthode 2: Tesseract (fallback)
+        elif pytesseract:
+            try:
+                img = Image.open(image_path)
+                # Extraction simple
+                text = pytesseract.image_to_string(img, lang='fra+eng')
+                if text.strip():
+                    extracted_texts.append({
+                        'text': text.strip(),
+                        'confidence': 1.0,
+                        'method': 'Tesseract'
+                    })
+                
+                # Extraction avec détails (positions)
+                data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT, lang='fra+eng')
+                for i in range(len(data['text'])):
+                    if int(data['conf'][i]) > 30:  # Confiance > 30%
+                        txt = data['text'][i].strip()
+                        if txt:
+                            extracted_texts.append({
+                                'text': txt,
+                                'confidence': int(data['conf'][i]) / 100,
+                                'bbox': (data['left'][i], data['top'][i], 
+                                        data['width'][i], data['height'][i]),
+                                'method': 'Tesseract'
+                            })
+            except Exception as tess_error:
+                print(f"⚠️ Tesseract error: {tess_error}")
+        
+        return extracted_texts
+    
+    except Exception as e:
+        print(f"❌ Erreur OCR: {e}")
+        return []
+
+def organize_extracted_text(extracted_texts):
+    """Organise le texte extrait de manière structurée"""
+    if not extracted_texts:
+        return "Aucun texte détecté dans l'image."
+    
+    # Grouper par méthode
+    by_method = {}
+    for item in extracted_texts:
+        method = item.get('method', 'Unknown')
+        if method not in by_method:
+            by_method[method] = []
+        by_method[method].append(item)
+    
+    # Formater la sortie
+    output = []
+    output.append("📝 **TEXTE EXTRAIT DE L'IMAGE:**\n")
+    
+    for method, items in by_method.items():
+        output.append(f"\n🔍 **Méthode: {method}**")
+        output.append(f"   Nombre d'éléments détectés: {len(items)}\n")
+        
+        # Trier par confiance
+        items_sorted = sorted(items, key=lambda x: x.get('confidence', 0), reverse=True)
+        
+        for idx, item in enumerate(items_sorted[:50], 1):  # Limiter à 50 éléments
+            confidence = item.get('confidence', 0)
+            text = item.get('text', '').strip()
+            
+            if text:
+                # Formater selon la confiance
+                if confidence > 0.8:
+                    output.append(f"   {idx}. ✅ [{confidence:.0%}] {text}")
+                elif confidence > 0.5:
+                    output.append(f"   {idx}. ⚠️  [{confidence:.0%}] {text}")
+                else:
+                    output.append(f"   {idx}. ❓ [{confidence:.0%}] {text}")
+    
+    # Texte complet reconstitué
+    output.append("\n\n📄 **TEXTE COMPLET RECONSTITUÉ:**\n")
+    full_text = " ".join([item['text'] for item in extracted_texts if item.get('text', '').strip()])
+    output.append(full_text)
+    
+    return "\n".join(output)
 
 def analyze_image_with_clip(image_path, vision_models):
     """Analyse une image avec CLIP local"""
@@ -2582,10 +2702,27 @@ def main():
                                 with st.spinner("📦 Chargement des modèles de vision locaux..."):
                                     st.session_state.vision_models = load_vision_models()
                             
+                            # Charger l'OCR
+                            if 'ocr_reader' not in st.session_state:
+                                with st.spinner("📦 Chargement du modèle OCR..."):
+                                    st.session_state.ocr_reader = load_ocr_reader()
+                            
                             vision_success = False
                             image_caption = ""
                             analysis_details = []
+                            extracted_text_info = ""
                             
+                            # Extraction du texte avec OCR
+                            if st.session_state.ocr_reader or pytesseract:
+                                st.info("📝 Extraction du texte de l'image...")
+                                extracted_texts = extract_text_from_image(tmp_path, st.session_state.ocr_reader)
+                                if extracted_texts:
+                                    extracted_text_info = organize_extracted_text(extracted_texts)
+                                    st.success(f"✅ {len(extracted_texts)} éléments de texte détectés!")
+                                else:
+                                    extracted_text_info = "Aucun texte détecté dans l'image."
+                            
+                            # Analyse visuelle avec CLIP
                             if st.session_state.vision_models:
                                 st.info("🔍 Analyse avec CLIP local...")
                                 caption, details = analyze_image_with_clip(tmp_path, st.session_state.vision_models)
@@ -2619,6 +2756,9 @@ def main():
 🎯 Classifications détaillées:
 {details_str}
 
+📝 TEXTE EXTRAIT DE L'IMAGE (OCR):
+{extracted_text_info}
+
 🌐 Informations complémentaires du web:
 {web_context if web_context else "Non disponibles"}
 
@@ -2627,29 +2767,40 @@ def main():
 1. **Description générale approfondie**:
    - Interprète ce que représente vraiment l'image
    - Donne le contexte général
+   - Prends en compte le texte extrait pour enrichir ton analyse
 
-2. **Éléments identifiables**:
+2. **Analyse du texte détecté**:
+   - Si du texte a été détecté, explique son contexte et sa signification
+   - Identifie s'il s'agit de légendes, descriptions, titres, annotations, etc.
+   - Relie le texte aux éléments visuels de l'image
+
+3. **Éléments identifiables**:
    - Liste tous les objets, structures, éléments visibles
    - Identifie les détails importants
+   - Corrèle avec le texte extrait si pertinent
 
-3. **Analyse du contexte**:
-   - Quel type d'image? (photo terrain, schéma technique, scan, graphique, etc.)
+4. **Analyse du contexte**:
+   - Quel type d'image? (photo terrain, schéma technique, scan, graphique, document, etc.)
    - Où et quand pourrait-elle avoir été prise?
+   - Le texte donne-t-il des indices supplémentaires?
 
-4. **Analyse technique et scientifique**:
+5. **Analyse technique et scientifique**:
    - Si c'est une image géologique: identifie les roches, minéraux, structures
    - Si c'est technique: explique les éléments techniques
+   - Si c'est un document: synthétise les informations textuelles
    - Donne des détails professionnels
 
-5. **Applications pratiques**:
+6. **Applications pratiques**:
    - À quoi cette image peut-elle servir?
    - Quelles informations peut-on en extraire?
+   - Comment le texte complète-t-il l'analyse visuelle?
 
-6. **Observations spécifiques**:
+7. **Observations spécifiques**:
    - Détails uniques ou remarquables
    - Éléments qui méritent attention
+   - Cohérence entre le texte et l'image
 
-Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 200 mots."""
+Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots."""
 
                                 text_client = create_client()
                                 analysis_response = text_client.chat.completions.create(
@@ -2661,10 +2812,19 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 200 mots
                                 
                                 enriched_analysis = analysis_response.choices[0].message.content
                                 
+                                # Préparer l'affichage avec le texte extrait
+                                analysis_display = f"**🖼️ Analyse de {img_file.name}**\n\n📏 Résolution: {width}x{height}px | Format: {img_format}\n\n"
+                                
+                                # Ajouter le texte extrait si disponible
+                                if extracted_text_info and "Aucun texte" not in extracted_text_info:
+                                    analysis_display += f"## 📝 Texte Extrait:\n\n{extracted_text_info}\n\n---\n\n"
+                                
+                                analysis_display += f"## 🤖 Analyse IA Complète:\n\n{enriched_analysis}"
+                                
                                 # Ajouter l'analyse au chat
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
-                                    "content": f"**🖼️ Analyse de {img_file.name}**\n\n📏 Résolution: {width}x{height}px | Format: {img_format}\n\n{enriched_analysis}"
+                                    "content": analysis_display
                                 })
                                 
                                 media_analysis_results.append({
@@ -2674,7 +2834,8 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 200 mots
                                     'format': img_format,
                                     'caption': image_caption,
                                     'ai_analysis': enriched_analysis,
-                                    'web_context': web_context
+                                    'web_context': web_context,
+                                    'extracted_text': extracted_text_info
                                 })
                             
                             else:
