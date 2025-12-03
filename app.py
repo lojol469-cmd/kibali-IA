@@ -137,9 +137,27 @@ try:
     import pytesseract
 except ImportError:
     pytesseract = None
-from diffusers import DiffusionPipeline, AudioLDMPipeline, ShapEPipeline, ShapEImg2ImgPipeline
+
+# Import diffusers avec gestion d'erreurs pour les classes optionnelles
+try:
+    from diffusers import DiffusionPipeline
+except ImportError:
+    DiffusionPipeline = None
+try:
+    from diffusers import AudioLDMPipeline
+except ImportError:
+    AudioLDMPipeline = None
+try:
+    from diffusers import ShapEPipeline, ShapEImg2ImgPipeline
+except ImportError:
+    ShapEPipeline = None
+    ShapEImg2ImgPipeline = None
+
 import imageio
-import scipy.io.wavfile as wavfile
+try:
+    import scipy.io.wavfile as wavfile
+except ImportError:
+    wavfile = None
 from tavily import TavilyClient
 # ===============================================
 # Import du système de modèle local Qwen
@@ -1303,6 +1321,8 @@ def extract_entities(text):
 # ===============================================
 def generate_text_to_image(prompt):
     """Génère une image à partir de texte"""
+    if DiffusionPipeline is None:
+        return "❌ DiffusionPipeline non disponible (installez diffusers)"
     try:
         pipe = DiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", use_auth_token=HF_TOKEN)
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1315,6 +1335,8 @@ def generate_text_to_image(prompt):
         return f"❌ Erreur génération image: {e}"
 def generate_text_to_video(prompt):
     """Génère une vidéo à partir de texte"""
+    if DiffusionPipeline is None:
+        return "❌ DiffusionPipeline non disponible (installez diffusers)"
     try:
         pipe = DiffusionPipeline.from_pretrained("damo-vilab/text-to-video-ms-1.7b", torch_dtype=torch.float16, variant="fp16", use_auth_token=HF_TOKEN)
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1331,6 +1353,10 @@ def generate_text_to_video(prompt):
         return f"❌ Erreur génération vidéo: {e}"
 def generate_text_to_audio(prompt):
     """Génère un son à partir de texte"""
+    if AudioLDMPipeline is None:
+        return "❌ AudioLDMPipeline non disponible (installez diffusers avec audio)"
+    if wavfile is None:
+        return "❌ scipy.io.wavfile non disponible (installez scipy)"
     try:
         pipe = AudioLDMPipeline.from_pretrained("cvssp/audio-ldm", torch_dtype=torch.float16, use_auth_token=HF_TOKEN)
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1343,6 +1369,8 @@ def generate_text_to_audio(prompt):
         return f"❌ Erreur génération son: {e}"
 def generate_text_to_3d(prompt):
     """Génère un modèle 3D à partir de texte (rendue image)"""
+    if ShapEPipeline is None:
+        return "❌ ShapEPipeline non disponible (installez diffusers avec shap-e)"
     try:
         pipe = ShapEPipeline.from_pretrained("openai/shap-e", use_auth_token=HF_TOKEN)
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -1356,6 +1384,8 @@ def generate_text_to_3d(prompt):
         return f"❌ Erreur génération 3D (texte): {e}"
 def generate_image_to_3d(image_path):
     """Génère un modèle 3D à partir d'une image (rendue image)"""
+    if ShapEImg2ImgPipeline is None:
+        return "❌ ShapEImg2ImgPipeline non disponible (installez diffusers avec shap-e)"
     try:
         pipe = ShapEImg2ImgPipeline.from_pretrained("openai/shap-e", use_auth_token=HF_TOKEN)
         device = "cuda" if torch.cuda.is_available() else "cpu"
