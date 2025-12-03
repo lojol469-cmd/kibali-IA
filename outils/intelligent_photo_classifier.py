@@ -20,13 +20,65 @@ class IntelligentPhotoClassifier:
         self.clip_processor = clip_processor
         self.device = device
         
+        # Prompts puissants pour analyse d'angles et positions
+        self.view_angle_prompts = [
+            "front view facing forward directly",
+            "slightly rotated to the left side view",
+            "slightly rotated to the right side view",
+            "left side profile view",
+            "right side profile view",
+            "three quarter view from front left",
+            "three quarter view from front right",
+            "three quarter view from back left",
+            "three quarter view from back right",
+            "back view from behind",
+            "top down overhead view from above",
+            "low angle view from below looking up",
+            "diagonal angle tilted perspective",
+            "close up detailed macro view",
+            "wide angle distant full view"
+        ]
+        
+        # Prompts pour caractéristiques visuelles
+        self.visual_quality_prompts = [
+            "sharp focused clear detailed image",
+            "bright well lit illuminated scene",
+            "dark shadowy dim lighting",
+            "high contrast dramatic lighting",
+            "soft diffused even lighting",
+            "colorful vibrant saturated colors",
+            "monochrome muted desaturated colors",
+            "smooth flat surface texture",
+            "rough textured detailed surface",
+            "reflective shiny glossy surface",
+            "matte non reflective surface"
+        ]
+        
+        # Prompts pour distance et cadrage
+        self.distance_framing_prompts = [
+            "extreme close up macro shot",
+            "close up tight framing",
+            "medium shot balanced framing",
+            "wide shot full view",
+            "extreme wide panoramic view",
+            "centered composition symmetrical",
+            "off center asymmetrical composition",
+            "high detail intricate texture",
+            "simple clean minimal detail",
+            "complex busy scene with many elements"
+        ]
+        
     def extract_visual_features(self, image_path: str) -> Dict:
         """
-        Extrait les features visuelles d'une image avec CLIP + analyse détaillée
+        Extrait les features visuelles d'une image avec CLIP + analyse détaillée multi-prompts
         
         Returns:
             Dict avec:
             - clip_embedding: Vecteur CLIP (512 dim)
+            - clip_text_similarities: Scores de similarité avec les prompts textuels
+            - view_angle_scores: Scores pour chaque angle de vue
+            - visual_quality_scores: Scores pour caractéristiques visuelles
+            - distance_framing_scores: Scores pour distance/cadrage
             - texture_features: Analyse de texture
             - color_histogram: Distribution des couleurs
             - edge_density: Densité de contours
@@ -37,11 +89,61 @@ class IntelligentPhotoClassifier:
         image = Image.open(image_path).convert('RGB')
         img_cv = cv2.imread(str(image_path))
         
-        # 1. CLIP Embedding (compréhension sémantique)
+        # 1. CLIP Embedding (compréhension sémantique de base)
         with torch.no_grad():
             inputs = self.clip_processor(images=image, return_tensors="pt").to(self.device)
             clip_features = self.clip_model.get_image_features(**inputs)
             clip_embedding = clip_features.cpu().numpy().flatten()
+        
+        # 2. CLIP avec prompts textuels pour analyse d'angle de vue
+        view_angle_scores = {}
+        with torch.no_grad():
+            text_inputs = self.clip_processor(
+                text=self.view_angle_prompts,
+                return_tensors="pt",
+                padding=True
+            ).to(self.device)
+            text_features = self.clip_model.get_text_features(**text_inputs)
+            
+            # Calcul similarité image-texte pour chaque prompt
+            image_features_norm = clip_features / clip_features.norm(dim=-1, keepdim=True)
+            text_features_norm = text_features / text_features.norm(dim=-1, keepdim=True)
+            similarity = (image_features_norm @ text_features_norm.T).squeeze(0)
+            
+            for idx, prompt in enumerate(self.view_angle_prompts):
+                view_angle_scores[prompt] = similarity[idx].cpu().item()
+        
+        # 3. CLIP avec prompts pour qualité visuelle
+        visual_quality_scores = {}
+        with torch.no_grad():
+            text_inputs = self.clip_processor(
+                text=self.visual_quality_prompts,
+                return_tensors="pt",
+                padding=True
+            ).to(self.device)
+            text_features = self.clip_model.get_text_features(**text_inputs)
+            
+            text_features_norm = text_features / text_features.norm(dim=-1, keepdim=True)
+            similarity = (image_features_norm @ text_features_norm.T).squeeze(0)
+            
+            for idx, prompt in enumerate(self.visual_quality_prompts):
+                visual_quality_scores[prompt] = similarity[idx].cpu().item()
+        
+        # 4. CLIP avec prompts pour distance/cadrage
+        distance_framing_scores = {}
+        with torch.no_grad():
+            text_inputs = self.clip_processor(
+                text=self.distance_framing_prompts,
+                return_tensors="pt",
+                padding=True
+            ).to(self.device)
+            text_features = self.clip_model.get_text_features(**text_inputs)
+            
+            text_features_norm = text_features / text_features.norm(dim=-1, keepdim=True)
+            similarity = (image_features_norm @ text_features_norm.T).squeeze(0)
+            
+            for idx, prompt in enumerate(self.distance_framing_prompts):
+                distance_framing_scores[prompt] = similarity[idx].cpu().item()
         
         # 2. Analyse de texture (gradients)
         gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
@@ -83,6 +185,9 @@ class IntelligentPhotoClassifier:
         
         return {
             'clip_embedding': clip_embedding,
+            'view_angle_scores': view_angle_scores,
+            'visual_quality_scores': visual_quality_scores,
+            'distance_framing_scores': distance_framing_scores,
             'texture': texture_features,
             'color_histogram': np.array(color_histogram),
             'edge_density': edge_density,
@@ -94,18 +199,39 @@ class IntelligentPhotoClassifier:
     
     def compute_visual_similarity(self, features1: Dict, features2: Dict) -> float:
         """
-        Calcule la similarité visuelle entre deux images
+        Calcule la similarité visuelle entre deux images avec prompts CLIP multi-critères
         
         Returns:
             Score de similarité (0.0 à 1.0)
             - 1.0 = très similaires (angles proches)
             - 0.0 = très différentes
         """
-        # 1. Similarité CLIP (sémantique) - poids 50%
+        # 1. Similarité CLIP embedding (sémantique générale) - poids 30%
         clip_sim = np.dot(features1['clip_embedding'], features2['clip_embedding'])
         clip_sim = (clip_sim + 1) / 2  # Normaliser de [-1,1] à [0,1]
         
-        # 2. Similarité de texture - poids 20%
+        # 2. Similarité d'angle de vue (prompts) - poids 25%
+        # Comparer les top 3 angles les plus probables
+        view1_sorted = sorted(features1['view_angle_scores'].items(), key=lambda x: x[1], reverse=True)[:3]
+        view2_sorted = sorted(features2['view_angle_scores'].items(), key=lambda x: x[1], reverse=True)[:3]
+        
+        view_angle_sim = 0
+        for v1_prompt, v1_score in view1_sorted:
+            if v1_prompt in dict(view2_sorted):
+                view_angle_sim += v1_score * dict(view2_sorted)[v1_prompt]
+        view_angle_sim = view_angle_sim / 3.0  # Normaliser
+        
+        # 3. Similarité de qualité visuelle (lighting, focus, etc.) - poids 15%
+        quality_scores1 = np.array(list(features1['visual_quality_scores'].values()))
+        quality_scores2 = np.array(list(features2['visual_quality_scores'].values()))
+        quality_sim = 1.0 - np.mean(np.abs(quality_scores1 - quality_scores2))
+        
+        # 4. Similarité de distance/cadrage - poids 10%
+        distance_scores1 = np.array(list(features1['distance_framing_scores'].values()))
+        distance_scores2 = np.array(list(features2['distance_framing_scores'].values()))
+        distance_sim = 1.0 - np.mean(np.abs(distance_scores1 - distance_scores2))
+        
+        # 5. Similarité de texture - poids 10%
         texture_diff = 0
         for key in ['mean', 'std', 'p25', 'p75']:
             t1 = features1['texture'][key]
@@ -113,27 +239,30 @@ class IntelligentPhotoClassifier:
             texture_diff += abs(t1 - t2) / (max(t1, t2) + 1e-5)
         texture_sim = 1.0 - (texture_diff / 4.0)
         
-        # 3. Similarité couleur (histogramme) - poids 15%
+        # 6. Similarité couleur (histogramme) - poids 5%
         hist1 = features1['color_histogram']
         hist2 = features2['color_histogram']
         color_sim = 1.0 - np.sum(np.abs(hist1 - hist2)) / 2.0
         
-        # 4. Similarité de luminosité/contraste - poids 10%
+        # 7. Similarité de luminosité/contraste - poids 3%
         brightness_diff = abs(features1['brightness'] - features2['brightness']) / 255.0
         contrast_diff = abs(features1['contrast'] - features2['contrast']) / 100.0
         lighting_sim = 1.0 - (brightness_diff + contrast_diff) / 2.0
         
-        # 5. Similarité de contours - poids 5%
+        # 8. Similarité de contours - poids 2%
         edge_diff = abs(features1['edge_density'] - features2['edge_density'])
         edge_sim = 1.0 - edge_diff
         
-        # Score final pondéré
+        # Score final pondéré avec focus sur angles de vue
         final_similarity = (
-            0.50 * clip_sim +
-            0.20 * texture_sim +
-            0.15 * color_sim +
-            0.10 * lighting_sim +
-            0.05 * edge_sim
+            0.30 * clip_sim +              # Sémantique générale
+            0.25 * view_angle_sim +        # ANGLE DE VUE (priorité!)
+            0.15 * quality_sim +           # Qualité visuelle
+            0.10 * distance_sim +          # Distance/cadrage
+            0.10 * texture_sim +           # Texture
+            0.05 * color_sim +             # Couleur
+            0.03 * lighting_sim +          # Luminosité
+            0.02 * edge_sim                # Contours
         )
         
         return np.clip(final_similarity, 0.0, 1.0)
@@ -141,7 +270,8 @@ class IntelligentPhotoClassifier:
     def classify_and_order_photos(
         self, 
         photo_paths: List[str],
-        method: str = 'sequential'
+        method: str = 'sequential',
+        progress_callback=None
     ) -> Tuple[List[str], Dict]:
         """
         Classifie et ordonne les photos pour reconstruction 3D optimale
@@ -149,6 +279,7 @@ class IntelligentPhotoClassifier:
         Args:
             photo_paths: Liste des chemins d'images
             method: 'sequential' (ordre séquentiel) ou 'cluster' (par groupes)
+            progress_callback: Fonction optionnelle (current, total, message)
         
         Returns:
             - Liste ordonnée des chemins
@@ -159,6 +290,8 @@ class IntelligentPhotoClassifier:
         # 1. Extraire features pour toutes les images
         features_list = []
         for idx, path in enumerate(photo_paths):
+            if progress_callback:
+                progress_callback(idx + 1, len(photo_paths), f"Analyse Vision AI")
             print(f"   📸 Analyse {idx+1}/{len(photo_paths)}: {Path(path).name}")
             features = self.extract_visual_features(path)
             features['path'] = path
@@ -407,10 +540,14 @@ def classify_photos_with_ai(
     clip_processor,
     device: str = 'cuda',
     method: str = 'sequential',
-    output_dir: str = None
+    output_dir: str = None,
+    progress_callback=None
 ) -> Tuple[List[str], str, str]:
     """
     Fonction principale pour classifier des photos avec l'IA
+    
+    Args:
+        progress_callback: Fonction (current, total, message) pour progression
     
     Returns:
         - ordered_paths: Liste ordonnée des chemins
@@ -420,7 +557,11 @@ def classify_photos_with_ai(
     classifier = IntelligentPhotoClassifier(clip_model, clip_processor, device)
     
     # Classifier et ordonner
-    ordered_paths, stats = classifier.classify_and_order_photos(photo_paths, method=method)
+    ordered_paths, stats = classifier.classify_and_order_photos(
+        photo_paths, 
+        method=method,
+        progress_callback=progress_callback
+    )
     
     # Générer rapport
     if output_dir:

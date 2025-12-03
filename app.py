@@ -4758,37 +4758,57 @@ avec une analyse contextuelle des objets détectés et leurs caractéristiques m
                 
                 # Bouton de classification IA
                 if st.button("🚀 **Analyser et Classer avec l'IA**", type="primary", use_container_width=True):
-                    with st.spinner("🤖 Vision AI en cours d'analyse..."):
-                        try:
-                            import tempfile
-                            import shutil
-                            from pathlib import Path
-                            from outils.intelligent_photo_classifier import classify_photos_with_ai
-                            
-                            # Créer dossier temporaire
-                            temp_dir = tempfile.mkdtemp(prefix="ai_photo_classifier_")
-                            
-                            # Sauvegarder les photos
-                            st.info(f"💾 Sauvegarde de {len(uploaded_photos)} photos...")
-                            photo_paths = []
-                            for photo in uploaded_photos:
-                                photo_path = Path(temp_dir) / photo.name
-                                with open(photo_path, 'wb') as f:
-                                    f.write(photo.getbuffer())
-                                photo_paths.append(str(photo_path))
-                            
-                            # Charger le modèle Vision AI (CLIP)
-                            st.info("📦")
-                            vision_models = load_vision_models()
+                    try:
+                        import tempfile
+                        import shutil
+                        from pathlib import Path
+                        from outils.intelligent_photo_classifier import classify_photos_with_ai
+                        
+                        # Créer un conteneur pour les logs en temps réel
+                        log_container = st.empty()
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        
+                        # Créer dossier temporaire
+                        log_container.info("📁 Création du dossier temporaire...")
+                        temp_dir = tempfile.mkdtemp(prefix="ai_photo_classifier_")
+                        progress_bar.progress(5)
+                        
+                        # Sauvegarder les photos
+                        status_text.text(f"💾 Sauvegarde de {len(uploaded_photos)} photos...")
+                        photo_paths = []
+                        for idx, photo in enumerate(uploaded_photos):
+                            photo_path = Path(temp_dir) / photo.name
+                            with open(photo_path, 'wb') as f:
+                                f.write(photo.getbuffer())
+                            photo_paths.append(str(photo_path))
+                            progress_bar.progress(5 + int((idx + 1) / len(uploaded_photos) * 15))
+                        
+                        log_container.success(f"✅ {len(uploaded_photos)} photos sauvegardées")
+                        
+                        # Charger le modèle Vision AI (CLIP)
+                        status_text.text("📦 Chargement du modèle Vision AI (CLIP)...")
+                        progress_bar.progress(20)
+                        vision_models = load_vision_models()
                             
                             if vision_models is None:
                                 st.error("❌ Impossible de charger le modèle CLIP")
                                 st.stop()
                             
+                            log_container.success(f"✅ Modèle CLIP chargé ({vision_models['device']})")
+                            progress_bar.progress(30)
+                            
                             # Classifier avec l'IA
-                            st.info("🔍")
+                            status_text.text("🔍 Analyse Vision AI en cours...")
+                            st.info("📊 Extraction des features visuelles avec CLIP...")
                             output_dir = temp_dir + "_classified"
                             Path(output_dir).mkdir(exist_ok=True)
+                            
+                            # Progress callback pour le classifier
+                            def update_progress(current, total, message):
+                                pct = 30 + int((current / total) * 50)
+                                progress_bar.progress(pct)
+                                status_text.text(f"🔍 {message} ({current}/{total})")
                             
                             ordered_paths, report, viz_path = classify_photos_with_ai(
                                 photo_paths,
@@ -4796,8 +4816,13 @@ avec une analyse contextuelle des objets détectés et leurs caractéristiques m
                                 vision_models['clip_processor'],
                                 device=vision_models['device'],
                                 method=ordering_method,
-                                output_dir=output_dir if generate_viz else None
+                                output_dir=output_dir if generate_viz else None,
+                                progress_callback=update_progress
                             )
+                            
+                            progress_bar.progress(80)
+                            status_text.text("✅ Analyse terminée !")
+                            log_container.success("🎉 Classification IA terminée avec succès !")
                             
                             # Afficher les résultats
                             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
