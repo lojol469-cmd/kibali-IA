@@ -264,38 +264,236 @@ class PhotogrammetryOptimizerTool(BaseTool):
         output.append(f"🎯 Couverture: {coverage_score:.2%}")
         output.append(f"💾 Espace économisé: ~{(1-len(selected_images)/total_images)*100:.1f}%\n")
         
-        # 7. Créer dossier de sortie avec les images sélectionnées
+        # 7. Ordonner les images de manière séquentielle pour Dust3R
+        output.append("🔄 **PHASE 5: Ordonnancement séquentiel pour Dust3R**\n")
+        output.append("   Calcul de l'ordre optimal des images...\n")
+        
+        # Algorithme de parcours séquentiel (Nearest Neighbor TSP)
+        ordered_indices = self._order_images_sequentially(
+            features_normalized[selected_indices],
+            selected_indices
+        )
+        ordered_images = [valid_images[idx] for idx in ordered_indices]
+        
+        output.append(f"   ✅ Images ordonnées pour reconstruction 3D optimale")
+        output.append(f"   📐 Distance moyenne entre images consécutives: minimisée\n")
+        
+        # 8. Créer dossier de sortie avec les images sélectionnées ORDONNÉES
+        # 8. Créer dossier de sortie avec les images sélectionnées ORDONNÉES
         output_folder = input_path.parent / f"{input_path.name}_optimized"
         output_folder.mkdir(exist_ok=True)
         
         output.append(f"📁 **Dossier de sortie**: {output_folder}\n")
-        output.append("📋 **Images sélectionnées**:\n")
+        output.append("📋 **Images sélectionnées (ordre séquentiel pour Dust3R)**:\n")
         
-        for idx, img_path in enumerate(selected_images, 1):
-            # Copier l'image
+        for idx, img_path in enumerate(ordered_images, 1):
+            # Copier l'image avec numérotation séquentielle
             dest_path = output_folder / f"{idx:04d}_{img_path.name}"
             shutil.copy2(img_path, dest_path)
             
             # Afficher seulement les 20 premières pour ne pas surcharger
             if idx <= 20:
-                cluster_id = cluster_labels[selected_indices[idx-1]]
-                cluster_size = cluster_sizes[cluster_id]
-                output.append(f"   {idx}. {img_path.name} (représente {cluster_size} images)")
+                original_idx = valid_images.index(img_path)
+                cluster_id = cluster_labels[original_idx]
+                output.append(f"   {idx}. {img_path.name} (cluster {cluster_id})")
         
-        if len(selected_images) > 20:
-            output.append(f"   ... et {len(selected_images) - 20} autres images")
+        if len(ordered_images) > 20:
+            output.append(f"   ... et {len(ordered_images) - 20} autres images")
         
-        # 8. Générer un rapport détaillé
+        # 9. Générer un fichier d'ordre pour Dust3R
+        order_file = output_folder / "image_order.txt"
+        with open(order_file, 'w', encoding='utf-8') as f:
+            f.write("# Ordre optimal des images pour reconstruction 3D (Dust3R)\n")
+            f.write("# Format: numéro, nom_fichier\n\n")
+            for idx, img_path in enumerate(ordered_images, 1):
+                f.write(f"{idx:04d}, {img_path.name}\n")
+        
+        output.append(f"\n📄 Fichier d'ordre: {order_file}")
+        
+        # 10. Générer un rapport détaillé
+        # 10. Générer un rapport détaillé
         report_path = output_folder / "optimization_report.txt"
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(output))
-            f.write("\n\n=== LISTE COMPLÈTE DES IMAGES SÉLECTIONNÉES ===\n")
-            for idx, img_path in enumerate(selected_images, 1):
+            f.write("\n\n=== LISTE COMPLÈTE DES IMAGES SÉLECTIONNÉES (ORDRE SÉQUENTIEL) ===\n")
+            for idx, img_path in enumerate(ordered_images, 1):
                 f.write(f"{idx}. {img_path.name}\n")
         
         output.append(f"\n📄 Rapport détaillé: {report_path}")
         
+        # 11. Générer une visualisation 3D des positions relatives
+        output.append("\n🎨 **PHASE 6: Génération de la visualisation 3D**\n")
+        try:
+            vis_result = self._generate_3d_visualization(
+                features_normalized[ordered_indices],
+                ordered_images,
+                output_folder
+            )
+            output.append(vis_result)
+        except Exception as e:
+            output.append(f"   ⚠️ Visualisation 3D non disponible: {e}")
+        
         return '\n'.join(output)
+    
+    def _order_images_sequentially(
+        self, 
+        selected_features: np.ndarray,
+        selected_indices: List[int]
+    ) -> List[int]:
+        """
+        Ordonne les images de manière séquentielle (Nearest Neighbor TSP)
+        pour que les images similaires soient côte à côte (optimal pour Dust3R)
+        """
+        from sklearn.metrics.pairwise import euclidean_distances
+        
+        n_images = len(selected_features)
+        if n_images <= 1:
+            return selected_indices
+        
+        # Calculer la matrice de distances
+        distances = euclidean_distances(selected_features, selected_features)
+        
+        # Algorithme du plus proche voisin (Greedy TSP)
+        visited = [False] * n_images
+        order = []
+        
+        # Commencer par l'image "centrale" (plus proche du centroïde)
+        centroid = selected_features.mean(axis=0)
+        distances_to_center = np.linalg.norm(selected_features - centroid, axis=1)
+        current_idx = np.argmin(distances_to_center)
+        
+        order.append(current_idx)
+        visited[current_idx] = True
+        
+        # Construire le parcours en choisissant toujours le plus proche non visité
+        for _ in range(n_images - 1):
+            current_distances = distances[current_idx].copy()
+            current_distances[visited] = np.inf  # Ignorer les déjà visités
+            
+            next_idx = np.argmin(current_distances)
+            order.append(next_idx)
+            visited[next_idx] = True
+            current_idx = next_idx
+        
+        # Retourner les indices originaux dans l'ordre optimal
+        ordered_indices = [selected_indices[i] for i in order]
+        return ordered_indices
+    
+    def _generate_3d_visualization(
+        self,
+        features: np.ndarray,
+        image_paths: List[Path],
+        output_folder: Path
+    ) -> str:
+        """
+        Génère une visualisation 3D interactive des positions relatives des images
+        et lance une visionneuse Open3D externe
+        """
+        try:
+            import open3d as o3d
+            from sklearn.decomposition import PCA
+            
+            # Réduire les features à 3D avec PCA
+            if features.shape[1] > 3:
+                pca = PCA(n_components=3)
+                positions_3d = pca.fit_transform(features)
+            else:
+                positions_3d = features
+            
+            # Créer un nuage de points
+            point_cloud = o3d.geometry.PointCloud()
+            point_cloud.points = o3d.utility.Vector3dVector(positions_3d)
+            
+            # Colorer les points selon l'ordre séquentiel (gradient)
+            n_points = len(positions_3d)
+            colors = np.zeros((n_points, 3))
+            for i in range(n_points):
+                # Gradient du vert au bleu
+                ratio = i / (n_points - 1)
+                colors[i] = [0, 1 - ratio, ratio]  # Vert → Bleu
+            
+            point_cloud.colors = o3d.utility.Vector3dVector(colors)
+            
+            # Ajouter des lignes connectant les images consécutives
+            lines = [[i, i+1] for i in range(n_points - 1)]
+            line_set = o3d.geometry.LineSet()
+            line_set.points = o3d.utility.Vector3dVector(positions_3d)
+            line_set.lines = o3d.utility.Vector2iVector(lines)
+            line_set.colors = o3d.utility.Vector3dVector([[1, 0, 0] for _ in lines])  # Rouge
+            
+            # Sauvegarder les géométries
+            pcd_path = output_folder / "image_positions.ply"
+            o3d.io.write_point_cloud(str(pcd_path), point_cloud)
+            
+            # Sauvegarder aussi la visualisation combinée
+            combined_path = output_folder / "sequence_visualization.ply"
+            combined = point_cloud + line_set
+            o3d.io.write_point_cloud(str(combined_path), combined)
+            
+            # Lancer la visionneuse Open3D en externe
+            output_text = []
+            output_text.append(f"   ✅ Nuage de points créé: {pcd_path}")
+            output_text.append(f"   🔗 Parcours séquentiel: {combined_path}")
+            output_text.append(f"   🎨 Gradient de couleur: Vert (début) → Bleu (fin)")
+            output_text.append(f"   📊 {n_points} positions calculées en 3D (PCA)")
+            
+            # Lancer la visionneuse dans un processus séparé
+            try:
+                import subprocess
+                import sys
+                
+                # Créer un script Python temporaire pour la visualisation
+                viewer_script = output_folder / "launch_viewer.py"
+                with open(viewer_script, 'w') as f:
+                    f.write(f'''
+import open3d as o3d
+
+# Charger les géométries
+point_cloud = o3d.io.read_point_cloud("{pcd_path}")
+line_set = o3d.geometry.LineSet()
+line_set.points = point_cloud.points
+lines = [[i, i+1] for i in range(len(point_cloud.points) - 1)]
+line_set.lines = o3d.utility.Vector2iVector(lines)
+line_set.colors = o3d.utility.Vector3dVector([[1, 0, 0] for _ in lines])
+
+# Visualiser
+print("🎨 Visualisation 3D - Séquence d'images optimisée")
+print("   Vert = Début de séquence")
+print("   Bleu = Fin de séquence")
+print("   Rouge = Connexions entre images consécutives")
+print("\\n🖱️  Contrôles:")
+print("   - Rotation: Clic gauche + glisser")
+print("   - Zoom: Molette souris")
+print("   - Pan: Shift + Clic gauche")
+print("   - Q ou ESC: Quitter")
+
+o3d.visualization.draw_geometries(
+    [point_cloud, line_set],
+    window_name="Séquence d'images optimisée pour Dust3R",
+    width=1200,
+    height=800,
+    point_show_normal=False
+)
+''')
+                
+                # Lancer en arrière-plan
+                subprocess.Popen([sys.executable, str(viewer_script)], 
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+                
+                output_text.append(f"\n   🚀 Visionneuse 3D lancée en externe!")
+                output_text.append(f"   💡 Script: {viewer_script}")
+                
+            except Exception as e:
+                output_text.append(f"\n   ⚠️ Visionneuse non lancée: {e}")
+                output_text.append(f"   💡 Vous pouvez visualiser manuellement: open3d.visualization.draw_geometries([...])")
+            
+            return '\n'.join(output_text)
+            
+        except ImportError:
+            return "   ⚠️ Open3D non disponible (Python 3.13 incompatible)"
+        except Exception as e:
+            return f"   ⚠️ Erreur visualisation: {e}"
     
     def _extract_image_features(self, img: np.ndarray) -> np.ndarray:
         """Extrait les features avancées d'une image pour distinguer les angles de vue"""

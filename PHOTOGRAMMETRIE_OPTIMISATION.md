@@ -27,14 +27,30 @@ Cet outil permet de **réduire drastiquement le nombre de photos** dans un datas
 - **Stratégie:** Grouper les photos similaires/redondantes
 - **Adaptation:** 2 représentants pour gros clusters (>10 images)
 
-### 3. Vérification de Couverture
+### 3. Ordonnancement Séquentiel (Nouveau!)
+- **Algorithme:** Nearest Neighbor TSP (Traveling Salesman Problem)
+- **Objectif:** Images similaires côte à côte pour Dust3R
+- **Optimisation:** Distance minimale entre images consécutives
+- **Sortie:** Fichier `image_order.txt` pour reconstruction 3D
+
+### 4. Vérification de Couverture
 - **Score de couverture:** Distance euclidienne moyenne
 - **Seuil configurable:** 80-100% (défaut: 95%)
 - **Amélioration automatique:** Ajout de photos si zones manquantes
 
-### 4. Export Optimisé
+### 5. Visualisation 3D (Nouveau!)
+- **Nuage de points:** Positions relatives des images (PCA 3D)
+- **Gradient de couleur:** Vert (début) → Bleu (fin) de séquence
+- **Connexions:** Lignes rouges entre images consécutives
+- **Visionneuse Open3D:** Lancée automatiquement en externe
+- **Fichiers:** `.ply` pour import dans Dust3R/MeshLab
+
+### 6. Export Optimisé
 - **Dossier:** `[nom]_optimized/`
-- **Numérotation:** `0001_photo.jpg`, `0002_photo.jpg`...
+- **Numérotation séquentielle:** `0001_photo.jpg`, `0002_photo.jpg`...
+- **Ordre optimal:** Images ordonnées pour reconstruction 3D
+- **Fichier d'ordre:** `image_order.txt` (mapping)
+- **Visualisation:** `image_positions.ply`, `sequence_visualization.ply`
 - **Rapport détaillé:** `optimization_report.txt`
 - **ZIP téléchargeable:** Via l'interface Streamlit
 
@@ -202,6 +218,54 @@ Si `coverage_score < coverage_threshold`:
 - Ajouter jusqu'à 20 images supplémentaires (ou 10% du total)
 - Recalculer le score de couverture
 
+### Phase 5: Ordonnancement Séquentiel (Nouveau!)
+
+**Algorithme:** Nearest Neighbor TSP (Greedy)
+
+```python
+# 1. Commencer par l'image la plus centrale
+centroid = features.mean(axis=0)
+current = argmin(distances_to_center)
+
+# 2. Construire le parcours
+visited = [current]
+for _ in range(n_images - 1):
+    # Trouver l'image non visitée la plus proche
+    distances_to_current = distances[current]
+    distances_to_current[visited] = inf
+    next = argmin(distances_to_current)
+    visited.append(next)
+    current = next
+```
+
+**Résultat:** Images ordonnées pour minimiser les "sauts" entre photos consécutives
+
+**Avantage:** Optimal pour Dust3R qui reconstruit progressivement à partir d'images similaires
+
+### Phase 6: Visualisation 3D (Nouveau!)
+
+```python
+# 1. Réduction dimensionnelle (PCA)
+pca = PCA(n_components=3)
+positions_3d = pca.fit_transform(features)
+
+# 2. Création du nuage de points
+point_cloud = o3d.geometry.PointCloud()
+point_cloud.points = positions_3d
+
+# 3. Gradient de couleur (ordre séquentiel)
+colors = gradient(vert → bleu, n_images)
+
+# 4. Connexions entre images consécutives
+lines = [(i, i+1) for i in range(n_images-1)]
+
+# 5. Export .ply
+o3d.io.write_point_cloud("sequence_visualization.ply", combined)
+
+# 6. Lancer visionneuse externe
+subprocess.Popen(["python", "launch_viewer.py"])
+```
+
 ---
 
 ## 📈 Performances
@@ -237,9 +301,9 @@ Si `coverage_score < coverage_threshold`:
 
 ## 💡 Cas d'Usage
 
-### 1. Photogrammétrie aérienne (drone)
+### 1. Photogrammétrie aérienne → Reconstruction Dust3R
 
-**Problème:** 1000 photos d'un site minier, redondance élevée
+**Problème:** 1000 photos d'un site minier, besoin de reconstruction 3D avec Dust3R
 
 **Solution:**
 ```python
@@ -250,7 +314,22 @@ tool.execute("", context={
 })
 ```
 
-**Résultat:** 18 photos sélectionnées, couverture 97.2%
+**Résultat:** 
+- 18 photos sélectionnées, couverture 97.2%
+- Images ordonnées séquentiellement (voisines = similaires)
+- Fichier `image_order.txt` pour pipeline Dust3R
+- Visualisation 3D du parcours optimal
+
+**Utilisation avec Dust3R:**
+```bash
+cd Dust3R
+python demo.py \
+    --image_dir /data/drone_mine_optimized \
+    --model_name DUSt3R_ViTLarge_BaseDecoder_512_dpt \
+    --output_dir /data/output_3d
+```
+
+Les images étant ordonnées, Dust3R reconstruit progressivement avec de meilleurs résultats!
 
 ### 2. Reconstruction 3D d'un bâtiment
 
@@ -287,15 +366,44 @@ tool.execute("", context={
 ## 🔧 Structure de sortie
 
 ```
-/data/photos_drone/               # Dossier original
-/data/photos_drone_optimized/     # Dossier créé
-    ├── 0001_DJI_0234.jpg         # Photo 1 (représente 87 photos)
-    ├── 0002_DJI_0456.jpg         # Photo 2 (représente 134 photos)
-    ├── 0003_DJI_0891.jpg         # Photo 3 (représente 56 photos)
+/data/photos_drone/                      # Dossier original
+/data/photos_drone_optimized/            # Dossier créé
+    ├── 0001_DJI_0234.jpg                # Photo 1 (ORDONNÉE)
+    ├── 0002_DJI_0456.jpg                # Photo 2 (proche de 1)
+    ├── 0003_DJI_0891.jpg                # Photo 3 (proche de 2)
     ├── ...
-    ├── 0018_DJI_1987.jpg         # Photo 18
-    └── optimization_report.txt   # Rapport détaillé
+    ├── 0018_DJI_1987.jpg                # Photo 18 (fin séquence)
+    ├── image_order.txt                  # Ordre séquentiel (NOUVEAU)
+    ├── image_positions.ply              # Nuage de points 3D (NOUVEAU)
+    ├── sequence_visualization.ply       # Visualisation complète (NOUVEAU)
+    ├── launch_viewer.py                 # Script visionneuse (NOUVEAU)
+    └── optimization_report.txt          # Rapport détaillé
 ```
+
+### Fichier `image_order.txt` (Nouveau!)
+
+```
+# Ordre optimal des images pour reconstruction 3D (Dust3R)
+# Format: numéro, nom_fichier
+
+0001, DJI_0234.jpg
+0002, DJI_0456.jpg
+0003, DJI_0891.jpg
+...
+0018, DJI_1987.jpg
+```
+
+### Visualisation 3D `.ply` (Nouveau!)
+
+**`image_positions.ply`:**
+- Nuage de points représentant les positions relatives des images
+- Couleurs: Gradient Vert → Bleu (ordre séquentiel)
+- Utilisable dans: Open3D, MeshLab, CloudCompare
+
+**`sequence_visualization.ply`:**
+- Nuage de points + lignes rouges connectant les images consécutives
+- Visualise le parcours optimal pour Dust3R
+- Lancé automatiquement dans la visionneuse Open3D
 
 ### Contenu du rapport
 
@@ -323,6 +431,18 @@ tool.execute("", context={
    Score de couverture: 97.30%
    Seuil requis: 95.00%
 
+🔄 PHASE 5: Ordonnancement séquentiel pour Dust3R
+   Calcul de l'ordre optimal des images...
+   ✅ Images ordonnées pour reconstruction 3D optimale
+   📐 Distance moyenne entre images consécutives: minimisée
+
+🎨 PHASE 6: Génération de la visualisation 3D
+   ✅ Nuage de points créé: image_positions.ply
+   🔗 Parcours séquentiel: sequence_visualization.ply
+   🎨 Gradient de couleur: Vert (début) → Bleu (fin)
+   📊 18 positions calculées en 3D (PCA)
+   🚀 Visionneuse 3D lancée en externe!
+
 ============================================================
 📈 RÉSULTATS FINAUX
 📸 Photos originales: 1000
@@ -333,9 +453,10 @@ tool.execute("", context={
 
 📁 Dossier de sortie: /data/photos_drone_optimized
 
-📋 Images sélectionnées:
-   1. DJI_0234.jpg (représente 87 images)
-   2. DJI_0456.jpg (représente 134 images)
+📋 Images sélectionnées (ordre séquentiel pour Dust3R):
+   1. DJI_0234.jpg (cluster 2)
+   2. DJI_0456.jpg (cluster 2)
+   3. DJI_0891.jpg (cluster 5)
    ...
 ```
 
@@ -433,13 +554,56 @@ context = {
 - [ ] Support des formats RAW
 - [ ] Détection de flou (élimination automatique)
 - [ ] Export en CSV des métadonnées EXIF
-- [ ] Visualisation 3D de la couverture
+- [x] **Ordonnancement séquentiel pour Dust3R** ✅
+- [x] **Visualisation 3D avec Open3D** ✅
 
 ### V2.1 (Futur)
 - [ ] GPU acceleration (CUDA)
 - [ ] Détection de pose (SfM simplifié)
+- [ ] Intégration directe avec Dust3R API
 - [ ] Répartition spatiale optimale
 - [ ] Interface de prévisualisation interactive
+- [ ] Export COLMAP format
+- [ ] Estimation de la profondeur
+
+### V3.0 (Vision)
+- [ ] Pipeline complet: Sélection → Dust3R → Maillage
+- [ ] Support multi-caméras (fusion datasets)
+- [ ] Calibration automatique
+- [ ] Optimisation bundle adjustment
+- [ ] Export vers Gaussian Splatting
+
+---
+
+## 🔗 Intégration Dust3R
+
+### Pipeline recommandé
+
+```bash
+# 1. Optimiser le dataset
+python optimize_photos.py --input photos/ --output optimized/
+
+# 2. Reconstruction 3D avec Dust3R
+cd Dust3R
+python demo.py \
+    --image_dir ../optimized/ \
+    --model_name DUSt3R_ViTLarge_BaseDecoder_512_dpt \
+    --output_dir ../output_3d/
+
+# 3. Visualiser le résultat
+python -c "
+import open3d as o3d
+pcd = o3d.io.read_point_cloud('output_3d/pointcloud.ply')
+o3d.visualization.draw_geometries([pcd])
+"
+```
+
+### Avantages de l'ordonnancement
+
+- ✅ **Meilleure convergence:** Dust3R reconstruit progressivement à partir d'images similaires
+- ✅ **Moins d'erreurs:** Évite les "sauts" visuels qui causent des incohérences
+- ✅ **Plus rapide:** Traitement séquentiel optimal
+- ✅ **Meilleure qualité:** Maillage final plus cohérent
 
 ---
 
