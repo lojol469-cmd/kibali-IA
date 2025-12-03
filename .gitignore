@@ -68,3 +68,5 @@ node_modules/
 .cache/
 .pytest_cache/
 .mypy_cache/
+# Exception: Configuration des modèles (sans les modèles eux-mêmes)
+

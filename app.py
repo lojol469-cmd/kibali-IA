@@ -14,6 +14,23 @@ from dotenv import load_dotenv
 # Obtenir le dossier du script actuel
 script_dir = Path(__file__).parent.absolute()
 
+# Import de la configuration centralisée des modèles
+import sys
+sys.path.insert(0, str(script_dir / "kibali_data" / "models"))
+from MODEL_PATHS import (
+    QWEN_MODEL_NAME, QWEN_CACHE_DIR,
+    SENTENCE_TRANSFORMER_MODEL, SENTENCE_TRANSFORMER_CACHE,
+    CLIP_MODEL_NAME, CLIP_CACHE_DIR,
+    EASYOCR_MODEL_DIR, EASYOCR_LANGUAGES,
+    SUMMARIZER_MODEL, SUMMARIZER_CACHE,
+    TRANSLATOR_MODEL, TRANSLATOR_CACHE,
+    NER_MODEL, NER_CACHE,
+    ensure_model_dirs
+)
+
+# Initialiser les dossiers de modèles
+ensure_model_dirs()
+
 # Chercher le fichier .env dans plusieurs emplacements possibles
 env_paths = [
     script_dir / ".env",  # Dans le même dossier que app.py
@@ -248,12 +265,10 @@ CONTEXTE UTILISATEUR: {user_message}
 # ===============================================
 @st.cache_resource
 def load_local_llm_model():
-    """Charge le modèle Qwen2.5-1.5B localement dans le dossier du projet"""
-    model_name = "Qwen/Qwen2.5-1.5B-Instruct"
+    """Charge le modèle Qwen2.5-1.5B depuis kibali_data/models"""
     
-    # Définir le cache local dans le dossier du projet
-    local_cache_dir = os.path.join(os.getcwd(), "models", "qwen2.5-1.5b")
-    os.makedirs(local_cache_dir, exist_ok=True)
+    print(f"🚀 Chargement de {QWEN_MODEL_NAME}...")
+    print(f"📁 Cache: {QWEN_CACHE_DIR}")
     
     # Récupérer le token depuis les variables d'environnement
     hf_token = os.getenv("HF_TOKEN", "")
@@ -272,12 +287,12 @@ def load_local_llm_model():
    
     # Charger tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
+        QWEN_MODEL_NAME,
         trust_remote_code=True,
         token=hf_token if hf_token else None,
         use_fast=True,
         resume_download=True,
-        cache_dir=local_cache_dir
+        cache_dir=str(QWEN_CACHE_DIR)
     )
     
     # Corriger le problème du pad_token = eos_token pour éviter les warnings
@@ -287,24 +302,24 @@ def load_local_llm_model():
     # Configuration optimisée selon le device
     if device == 'cuda':
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            QWEN_MODEL_NAME,
             device_map="auto",
             torch_dtype=torch.float16,
             trust_remote_code=True,
             token=hf_token if hf_token else None,
             low_cpu_mem_usage=True,
             resume_download=True,
-            cache_dir=local_cache_dir
+            cache_dir=str(QWEN_CACHE_DIR)
         )
     else:
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            QWEN_MODEL_NAME,
             torch_dtype=torch.float32,
             trust_remote_code=True,
             token=hf_token if hf_token else None,
             low_cpu_mem_usage=True,
             resume_download=True,
-            cache_dir=local_cache_dir
+            cache_dir=str(QWEN_CACHE_DIR)
         ).to(device)
    
     return tokenizer, model, device, gpu_info
@@ -641,13 +656,14 @@ def load_vision_models():
         
         # Charger CLIP pour analyse sémantique
         print("📦 Chargement du modèle CLIP local...")
+        print(f"📁 Cache: {CLIP_CACHE_DIR}")
         clip_model = CLIPModel.from_pretrained(
-            "openai/clip-vit-base-patch32",
-            cache_dir="/home/belikan/.cache/huggingface/hub"
+            CLIP_MODEL_NAME,
+            cache_dir=str(CLIP_CACHE_DIR)
         ).to(device)
         clip_processor = CLIPProcessor.from_pretrained(
-            "openai/clip-vit-base-patch32",
-            cache_dir="/home/belikan/.cache/huggingface/hub"
+            CLIP_MODEL_NAME,
+            cache_dir=str(CLIP_CACHE_DIR)
         )
         
         print(f"✅ Modèle CLIP chargé sur {device}")
@@ -663,11 +679,20 @@ def load_vision_models():
 
 @st.cache_resource
 def load_ocr_reader():
-    """Charge le lecteur OCR EasyOCR"""
+    """Charge le lecteur OCR EasyOCR avec cache centralisé"""
     try:
         if easyocr:
             print("📦 Chargement du modèle OCR EasyOCR...")
-            reader = easyocr.Reader(['fr', 'en'], gpu=torch.cuda.is_available())
+            print(f"📁 Cache: {EASYOCR_MODEL_DIR}")
+            
+            # Créer le dossier s'il n'existe pas
+            EASYOCR_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+            
+            reader = easyocr.Reader(
+                EASYOCR_LANGUAGES, 
+                gpu=torch.cuda.is_available(),
+                model_storage_directory=str(EASYOCR_MODEL_DIR)
+            )
             print("✅ Modèle OCR chargé")
             return reader
         else:
