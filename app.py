@@ -4824,6 +4824,12 @@ avec une analyse contextuelle des objets détectés et leurs caractéristiques m
                         status_text.text("✅ Analyse terminée !")
                         log_container.success("🎉 Classification IA terminée avec succès !")
                         
+                        # Sauvegarder ordered_paths dans session_state AVANT la fin du try
+                        st.session_state.classification_ordered_paths = ordered_paths
+                        st.session_state.classification_report = report
+                        st.session_state.classification_viz_path = viz_path
+                        st.session_state.classification_done = True
+                        
                         # Afficher les résultats
                         st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
                         st.markdown("### 🎯 Résultats de la Classification IA")
@@ -4880,191 +4886,310 @@ avec une analyse contextuelle des objets détectés et leurs caractéristiques m
                             )
                         
                         st.info("💡 Photos ordonnées de manière optimale pour reconstruction 3D")
-                        
-                        # ============================================================
-                        # 🤖 CHAT INTERACTIF KIBALI - MANIPULATION DES IMAGES
-                        # ============================================================
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                        st.markdown("### 💬 Chat Kibali - Affinez la classification avec l'IA")
-                        st.markdown("""
-                        Utilisez le chat pour manipuler l'ordre des photos avec des commandes naturelles :
-                        - *"Mets les photos sombres au début"*
-                        - *"Regroupe les images similaires ensemble"*
-                        - *"Place les vues frontales avant les vues latérales"*
-                        - *"Inverse l'ordre actuel"*
-                        - *"Supprime les photos floues"*
-                        """)
-                        
-                        # Initialiser l'historique du chat
-                        if 'classification_chat_history' not in st.session_state:
-                            st.session_state.classification_chat_history = []
-                        if 'current_ordered_paths' not in st.session_state:
-                            st.session_state.current_ordered_paths = ordered_paths
-                        
-                        # Afficher l'historique du chat
-                        chat_container = st.container()
-                        with chat_container:
-                            for message in st.session_state.classification_chat_history:
-                                if message['role'] == 'user':
-                                    st.markdown(f"**👤 Vous:** {message['content']}")
-                                else:
-                                    st.markdown(f"**🤖 Kibali:** {message['content']}")
-                        
-                        # Input utilisateur
-                        user_prompt = st.text_input(
-                            "💬 Votre commande:",
-                            placeholder="Ex: Mets les photos lumineuses au début...",
-                            key="classification_chat_input"
-                        )
-                        
-                        if st.button("📤 Envoyer", key="send_classification_command"):
-                            if user_prompt:
-                                # Ajouter le message utilisateur
-                                st.session_state.classification_chat_history.append({
-                                    'role': 'user',
-                                    'content': user_prompt
-                                })
-                                
-                                with st.spinner("🤖 Kibali analyse votre demande..."):
-                                    try:
-                                        # Charger le LLM local
-                                        if 'qwen_model' not in st.session_state:
-                                            tokenizer, model, device, gpu_info = load_local_llm_model()
-                                            st.session_state.qwen_tokenizer = tokenizer
-                                            st.session_state.qwen_model = model
-                                        
-                                        # Préparer le contexte pour l'IA
-                                        context_info = f"""
-Tu es Kibali, assistant IA spécialisé en photogrammétrie.
-L'utilisateur a {len(st.session_state.current_ordered_paths)} photos classées.
-
-INFORMATIONS SUR LES PHOTOS:
-{chr(10).join([f"- Photo {i+1}: {Path(p).name}" for i, p in enumerate(st.session_state.current_ordered_paths[:10])])}
-{'... et ' + str(len(st.session_state.current_ordered_paths) - 10) + ' autres photos' if len(st.session_state.current_ordered_paths) > 10 else ''}
-
-COMMANDES DISPONIBLES:
-- reorder_brightness: Trier par luminosité (asc/desc)
-- reorder_by_angle: Regrouper par angle de vue
-- reverse_order: Inverser l'ordre actuel
-- move_to_start: Déplacer certaines photos au début
-- move_to_end: Déplacer certaines photos à la fin
-- remove_similar: Supprimer photos trop similaires
-
-L'utilisateur demande: "{user_prompt}"
-
-Réponds en JSON avec:
-{{
-    "action": "nom_action",
-    "params": {{}},
-    "explanation": "Explication claire"
-}}
-"""
-                                        
-                                        # Générer la réponse
-                                        messages = [
-                                            {"role": "system", "content": "Tu es un assistant IA spécialisé en manipulation d'images pour la photogrammétrie."},
-                                            {"role": "user", "content": context_info}
-                                        ]
-                                        
-                                        inputs = st.session_state.qwen_tokenizer.apply_chat_template(
-                                            messages,
-                                            add_generation_prompt=True,
-                                            return_tensors="pt"
-                                        ).to(st.session_state.qwen_model.device)
-                                        
-                                        with torch.no_grad():
-                                            outputs = st.session_state.qwen_model.generate(
-                                                inputs,
-                                                max_new_tokens=500,
-                                                temperature=0.3,
-                                                do_sample=True
-                                            )
-                                        
-                                        response = st.session_state.qwen_tokenizer.decode(
-                                            outputs[0][inputs.shape[1]:],
-                                            skip_special_tokens=True
-                                        )
-                                        
-                                        # Parser la réponse JSON
-                                        import json
-                                        import re
-                                        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-                                        
-                                        if json_match:
-                                            command = json.loads(json_match.group())
-                                            action = command.get('action', '')
-                                            explanation = command.get('explanation', '')
-                                            
-                                            # Exécuter l'action
-                                            new_order = st.session_state.current_ordered_paths.copy()
-                                            
-                                            if action == 'reorder_brightness':
-                                                # Réorganiser par luminosité
-                                                brightness_scores = []
-                                                for path in new_order:
-                                                    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-                                                    brightness_scores.append(img.mean())
-                                                
-                                                if command['params'].get('direction') == 'desc':
-                                                    sorted_indices = np.argsort(brightness_scores)[::-1]
-                                                else:
-                                                    sorted_indices = np.argsort(brightness_scores)
-                                                
-                                                new_order = [new_order[i] for i in sorted_indices]
-                                                
-                                            elif action == 'reverse_order':
-                                                new_order = new_order[::-1]
-                                                
-                                            elif action == 'reorder_by_angle':
-                                                # Regrouper par angle (utiliser features existantes)
-                                                st.info("🔄 Regroupement par angle en cours...")
-                                                
-                                            # Mettre à jour l'ordre
-                                            st.session_state.current_ordered_paths = new_order
-                                            
-                                            # Réponse de Kibali
-                                            kibali_response = f"✅ {explanation}\n\n📊 Nouvel ordre appliqué avec {len(new_order)} photos."
-                                        else:
-                                            kibali_response = f"🤖 {response}"
-                                        
-                                        st.session_state.classification_chat_history.append({
-                                            'role': 'assistant',
-                                            'content': kibali_response
-                                        })
-                                        
-                                        st.rerun()
-                                        
-                                    except Exception as e:
-                                        error_msg = f"❌ Erreur: {str(e)}"
-                                        st.session_state.classification_chat_history.append({
-                                            'role': 'assistant',
-                                            'content': error_msg
-                                        })
-                                        st.error(error_msg)
-                        
-                        # Afficher l'ordre actuel
-                        if st.session_state.get('current_ordered_paths'):
-                            st.markdown("#### 📸 Ordre actuel des photos")
-                            cols = st.columns(5)
-                            for idx, path in enumerate(st.session_state.current_ordered_paths[:15]):
-                                with cols[idx % 5]:
-                                    try:
-                                        img = Image.open(path)
-                                        img.thumbnail((150, 150))
-                                        st.image(img, caption=f"#{idx+1}", use_container_width=True)
-                                    except:
-                                        st.text(f"#{idx+1}: {Path(path).name}")
-                            
-                            if len(st.session_state.current_ordered_paths) > 15:
-                                st.info(f"... et {len(st.session_state.current_ordered_paths) - 15} autres photos")
-                        
                         st.markdown('</div>', unsafe_allow_html=True)
                         
                     except Exception as e:
                         st.error(f"❌ Erreur lors de la classification: {str(e)}")
                         import traceback
                         st.text(traceback.format_exc())
+                
+                # ============================================================
+                # 🤖 CHAT INTERACTIF KIBALI - AFFICHAGE APRÈS CLASSIFICATION
+                # ============================================================
+                if st.session_state.get('classification_done', False):
+                    st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                    st.markdown("### 💬 Chat Kibali - Affinez la classification avec l'IA")
+                    st.markdown("""
+                    Utilisez le chat pour manipuler l'ordre des photos avec des commandes naturelles :
+                    - *"Mets les photos sombres au début"*
+                    - *"Regroupe les images similaires ensemble"*
+                    - *"Place les vues frontales avant les vues latérales"*
+                    - *"Inverse l'ordre actuel"*
+                    - *"Supprime les photos floues"*
+                    """)
+                    
+                    # Initialiser l'historique du chat
+                    if 'classification_chat_history' not in st.session_state:
+                        st.session_state.classification_chat_history = []
+                    if 'current_ordered_paths' not in st.session_state:
+                        st.session_state.current_ordered_paths = st.session_state.classification_ordered_paths
+                    
+                    # Afficher l'historique du chat
+                    for message in st.session_state.classification_chat_history:
+                        if message['role'] == 'user':
+                            st.markdown(f"**👤 Vous:** {message['content']}")
+                        else:
+                            st.markdown(f"**🤖 Kibali:** {message['content']}")
+                    
+                    # Input utilisateur
+                    col1, col2 = st.columns([4, 1])
+                    with col1:
+                        user_prompt = st.text_input(
+                            "💬 Votre commande:",
+                            placeholder="Ex: Mets les photos lumineuses au début...",
+                            key="classification_chat_input",
+                            label_visibility="collapsed"
+                        )
+                    with col2:
+                        send_btn = st.button("📤 Envoyer", key="send_classification_command", use_container_width=True)
+                    
+                    if send_btn and user_prompt:
+                        # Ajouter le message utilisateur
+                        st.session_state.classification_chat_history.append({
+                            'role': 'user',
+                            'content': user_prompt
+                        })
+                        
+                        with st.spinner("🤖 Kibali analyse votre demande..."):
+                            try:
+                                # Charger le LLM local pour comprendre la demande
+                                if 'qwen_tokenizer' not in st.session_state or 'qwen_model' not in st.session_state:
+                                    tokenizer, model, device, gpu_info = load_local_llm_model()
+                                    st.session_state.qwen_tokenizer = tokenizer
+                                    st.session_state.qwen_model = model
+                                
+                                # Extraire features pour analyse intelligente
+                                features_list = []
+                                if 'current_features' not in st.session_state:
+                                    # Extraire features de base pour toutes les images
+                                    for path in st.session_state.current_ordered_paths[:50]:  # Limiter à 50 pour performance
+                                        img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+                                        if img is not None:
+                                            features_list.append({
+                                                'path': path,
+                                                'brightness': img.mean(),
+                                                'contrast': img.std(),
+                                                'name': Path(path).name
+                                            })
+                                    st.session_state.current_features = features_list
+                                else:
+                                    features_list = st.session_state.current_features
+                                
+                                # Contexte pour l'IA
+                                context = f"""Tu es Kibali, assistant IA pour la photogrammétrie.
+Photos actuelles: {len(st.session_state.current_ordered_paths)}
+Exemples: {', '.join([f['name'] for f in features_list[:5]])}
+
+L'utilisateur demande: "{user_prompt}"
+
+Analyse la demande et réponds en JSON:
+{{
+    "action": "reorder_brightness_asc|reorder_brightness_desc|reverse_order|group_similar|reorder_by_angle|move_range|no_action",
+    "params": {{}},
+    "explanation": "explication claire"
+}}
+
+Actions disponibles:
+- reorder_brightness_asc: Trier du sombre au clair
+- reorder_brightness_desc: Trier du clair au sombre  
+- reverse_order: Inverser l'ordre
+- group_similar: Regrouper images similaires
+- reorder_by_angle: Réorganiser par angle de vue
+- move_range: Déplacer une plage d'images (params: {{"start": 0, "end": 10, "to": 50}})
+- no_action: Aucune action possible
+
+Détecte l'intention naturellement (similarité, angle, luminosité, ordre, déplacement, etc.)"""
+                                
+                                # Générer réponse avec LLM
+                                messages = [
+                                    {"role": "system", "content": "Tu es un expert en classification d'images qui comprend les demandes naturelles."},
+                                    {"role": "user", "content": context}
+                                ]
+                                
+                                inputs = st.session_state.qwen_tokenizer.apply_chat_template(
+                                    messages,
+                                    add_generation_prompt=True,
+                                    return_tensors="pt"
+                                ).to(st.session_state.qwen_model.device)
+                                
+                                with torch.no_grad():
+                                    outputs = st.session_state.qwen_model.generate(
+                                        inputs,
+                                        max_new_tokens=400,
+                                        temperature=0.3,
+                                        do_sample=True,
+                                        pad_token_id=st.session_state.qwen_tokenizer.eos_token_id
+                                    )
+                                
+                                response = st.session_state.qwen_tokenizer.decode(
+                                    outputs[0][inputs.shape[1]:],
+                                    skip_special_tokens=True
+                                )
+                                
+                                # Parser JSON
+                                import json
+                                import re
+                                json_match = re.search(r'\{[^{}]*"action"[^{}]*\}', response, re.DOTALL)
+                                
+                                new_order = st.session_state.current_ordered_paths.copy()
+                                kibali_response = ""
+                                
+                                if json_match:
+                                    try:
+                                        command = json.loads(json_match.group())
+                                        action = command.get('action', 'no_action')
+                                        params = command.get('params', {})
+                                        explanation = command.get('explanation', '')
+                                        
+                                        # Exécuter l'action
+                                        if action == 'reorder_brightness_asc':
+                                            brightness_scores = []
+                                            for path in new_order:
+                                                img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+                                                brightness_scores.append(img.mean() if img is not None else 0)
+                                            sorted_indices = np.argsort(brightness_scores)
+                                            new_order = [new_order[i] for i in sorted_indices]
+                                            kibali_response = f"✅ {explanation}\n\n📊 Photos triées du plus sombre au plus clair."
+                                            
+                                        elif action == 'reorder_brightness_desc':
+                                            brightness_scores = []
+                                            for path in new_order:
+                                                img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+                                                brightness_scores.append(img.mean() if img is not None else 0)
+                                            sorted_indices = np.argsort(brightness_scores)[::-1]
+                                            new_order = [new_order[i] for i in sorted_indices]
+                                            kibali_response = f"✅ {explanation}\n\n📊 Photos triées du plus clair au plus sombre."
+                                            
+                                        elif action == 'reverse_order':
+                                            new_order = new_order[::-1]
+                                            kibali_response = f"✅ {explanation}\n\n🔄 Ordre inversé."
+                                            
+                                        elif action == 'group_similar':
+                                            # Regrouper par similarité de luminosité (approximation rapide)
+                                            brightness_scores = []
+                                            for path in new_order:
+                                                img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+                                                brightness_scores.append(img.mean() if img is not None else 0)
+                                            
+                                            # Clustering simple par luminosité
+                                            from sklearn.cluster import KMeans
+                                            if len(brightness_scores) > 3:
+                                                n_clusters = min(5, len(brightness_scores) // 10 + 1)
+                                                kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+                                                labels = kmeans.fit_predict(np.array(brightness_scores).reshape(-1, 1))
+                                                
+                                                # Réorganiser par cluster
+                                                sorted_indices = np.argsort(labels)
+                                                new_order = [new_order[i] for i in sorted_indices]
+                                                kibali_response = f"✅ {explanation}\n\n🎨 Photos regroupées en {n_clusters} groupes similaires."
+                                            else:
+                                                kibali_response = "⚠️ Pas assez de photos pour regrouper."
+                                                
+                                        elif action == 'move_range':
+                                            # Déplacer une plage d'images
+                                            start = params.get('start', 0)
+                                            end = params.get('end', 1)
+                                            to = params.get('to', 0)
+                                            
+                                            if 0 <= start < end <= len(new_order) and 0 <= to <= len(new_order):
+                                                moved_items = new_order[start:end]
+                                                remaining = new_order[:start] + new_order[end:]
+                                                new_order = remaining[:to] + moved_items + remaining[to:]
+                                                kibali_response = f"✅ {explanation}\n\n📦 {end-start} photos déplacées."
+                                            else:
+                                                kibali_response = "❌ Indices invalides pour le déplacement."
+                                                
+                                        else:
+                                            kibali_response = f"🤖 {explanation}"
+                                        
+                                    except json.JSONDecodeError:
+                                        kibali_response = f"🤖 J'ai compris votre demande mais je n'ai pas pu l'exécuter. Réponse: {response[:200]}"
+                                else:
+                                    kibali_response = f"🤖 {response[:300]}"
+                                
+                                # Mettre à jour l'ordre si modifié
+                                if new_order != st.session_state.current_ordered_paths:
+                                    st.session_state.current_ordered_paths = new_order
+                                    # Invalider le cache des features
+                                    if 'current_features' in st.session_state:
+                                        del st.session_state.current_features
+                                
+                                st.session_state.classification_chat_history.append({
+                                    'role': 'assistant',
+                                    'content': kibali_response
+                                })
+                                
+                                st.rerun()
+                                
+                            except Exception as e:
+                                error_msg = f"❌ Erreur: {str(e)}"
+                                st.session_state.classification_chat_history.append({
+                                    'role': 'assistant',
+                                    'content': error_msg
+                                })
+                                st.error(error_msg)
+                                import traceback
+                                st.text(traceback.format_exc())
+                    
+                    # Afficher l'ordre actuel
+                    st.markdown("#### 📸 Ordre actuel des photos")
+                    
+                    # Outil de déplacement manuel
+                    st.markdown("**🎯 Déplacement manuel rapide:**")
+                    col_move1, col_move2, col_move3 = st.columns(3)
+                    
+                    with col_move1:
+                        move_from = st.number_input(
+                            "De la position",
+                            min_value=1,
+                            max_value=len(st.session_state.current_ordered_paths),
+                            value=1,
+                            key="move_from"
+                        )
+                    
+                    with col_move2:
+                        move_to = st.number_input(
+                            "Vers la position",
+                            min_value=1,
+                            max_value=len(st.session_state.current_ordered_paths),
+                            value=1,
+                            key="move_to"
+                        )
+                    
+                    with col_move3:
+                        if st.button("↔️ Déplacer", key="manual_move_btn"):
+                            if move_from != move_to:
+                                new_order = st.session_state.current_ordered_paths.copy()
+                                item = new_order.pop(move_from - 1)
+                                new_order.insert(move_to - 1, item)
+                                st.session_state.current_ordered_paths = new_order
+                                
+                                st.session_state.classification_chat_history.append({
+                                    'role': 'assistant',
+                                    'content': f"✅ Photo #{move_from} déplacée à la position #{move_to}"
+                                })
+                                st.rerun()
+                    
+                    # Galerie d'images
+                    cols = st.columns(5)
+                    for idx, path in enumerate(st.session_state.current_ordered_paths[:15]):
+                        with cols[idx % 5]:
+                            try:
+                                img = Image.open(path)
+                                img.thumbnail((150, 150))
+                                st.image(img, caption=f"#{idx+1}", use_container_width=True)
+                                
+                                # Boutons de déplacement rapide
+                                subcol1, subcol2 = st.columns(2)
+                                with subcol1:
+                                    if idx > 0 and st.button("⬆️", key=f"up_{idx}"):
+                                        new_order = st.session_state.current_ordered_paths.copy()
+                                        new_order[idx], new_order[idx-1] = new_order[idx-1], new_order[idx]
+                                        st.session_state.current_ordered_paths = new_order
+                                        st.rerun()
+                                with subcol2:
+                                    if idx < len(st.session_state.current_ordered_paths) - 1 and st.button("⬇️", key=f"down_{idx}"):
+                                        new_order = st.session_state.current_ordered_paths.copy()
+                                        new_order[idx], new_order[idx+1] = new_order[idx+1], new_order[idx]
+                                        st.session_state.current_ordered_paths = new_order
+                                        st.rerun()
+                            except:
+                                st.text(f"#{idx+1}: {Path(path).name}")
+                    
+                    if len(st.session_state.current_ordered_paths) > 15:
+                        st.info(f"... et {len(st.session_state.current_ordered_paths) - 15} autres photos")
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
             
             else:
                 # MODE OPTIMISATION RAPIDE (ancien système)
