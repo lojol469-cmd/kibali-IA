@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kibali AI - Prévisualisation Carte 3D</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 3rem;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            color: #00ff88;
+            text-align: center;
+            margin-bottom: 2rem;
+            font-size: 2.5rem;
+            text-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+        }
+        
+        .info-box {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            color: #e0e0e0;
+        }
+        
+        .info-box h3 {
+            color: #00ff88;
+            margin-bottom: 1rem;
+        }
+        
+        .info-box ul {
+            list-style: none;
+            padding-left: 1rem;
+        }
+        
+        .info-box li {
+            margin: 0.5rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+        }
+        
+        .info-box li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #00ff88;
+            font-weight: bold;
+        }
+        
+        /* Message Utilisateur 3D */
+        .chat-message-user {
+            position: relative;
+            background: linear-gradient(145deg, #0088ff 0%, #00ff88 100%);
+            color: white;
+            padding: 1.2rem 1.8rem;
+            border-radius: 18px 18px 4px 18px;
+            margin: 1.5rem 0.5rem 1.5rem auto;
+            max-width: 75%;
+            
+            /* Effet 3D dalle épaisse */
+            box-shadow: 
+                0 15px 30px rgba(0, 136, 255, 0.4),
+                0 8px 16px rgba(0, 0, 0, 0.3),
+                inset 0 2px 0 rgba(255, 255, 255, 0.2),
+                inset 0 -2px 0 rgba(0, 0, 0, 0.2),
+                -6px 0 12px rgba(0, 136, 255, 0.2),
+                6px 0 12px rgba(0, 255, 136, 0.2);
+            
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transform: perspective(1000px) rotateX(-2deg);
+            animation: slideInRight3D 0.4s ease-out;
+            font-weight: 500;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        }
+        
+        .chat-message-user .top-slice {
+            position: absolute;
+            top: -3px;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, 
+                rgba(255, 255, 255, 0.3) 0%, 
+                rgba(255, 255, 255, 0.1) 100%);
+            border-radius: 18px 18px 0 0;
+        }
+        
+        @keyframes slideInRight3D {
+            0% { 
+                transform: perspective(1000px) rotateX(-10deg) translateX(30px); 
+                opacity: 0; 
+            }
+            100% { 
+                transform: perspective(1000px) rotateX(-2deg) translateX(0); 
+                opacity: 1; 
+            }
+        }
+        
+        /* Message Assistant 3D - Dalle Épaisse */
+        .chat-message-assistant {
+            position: relative;
+            background: linear-gradient(145deg, #1a1a2e 0%, #16213e 50%, #1a1a2e 100%);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            padding: 2rem;
+            border-radius: 16px;
+            margin: 2rem 0.5rem;
+            box-shadow: 
+                0 20px 40px rgba(0, 0, 0, 0.6),
+                0 10px 20px rgba(0, 0, 0, 0.4),
+                0 25px 50px rgba(0, 255, 136, 0.2),
+                inset 0 2px 0 rgba(255, 255, 255, 0.1),
+                inset 0 -2px 0 rgba(0, 0, 0, 0.3),
+                -8px 0 16px rgba(0, 255, 136, 0.15),
+                8px 0 16px rgba(0, 136, 255, 0.15);
+            border-left: 6px solid;
+            border-image: linear-gradient(180deg, 
+                rgba(0, 255, 136, 1) 0%, 
+                rgba(0, 255, 136, 0.6) 50%, 
+                rgba(0, 255, 136, 1) 100%) 1;
+            transform: perspective(1000px) rotateX(2deg);
+            transform-style: preserve-3d;
+            backdrop-filter: blur(10px);
+            animation: slideIn3D 0.5s ease-out;
+        }
+        
+        /* Tranche supérieure visible */
+        .chat-message-assistant .top-slice {
+            position: absolute;
+            top: -4px;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, 
+                rgba(0, 255, 136, 0.4) 0%, 
+                rgba(0, 136, 255, 0.4) 100%);
+            border-radius: 16px 16px 0 0;
+            box-shadow: 0 -2px 10px rgba(0, 255, 136, 0.3);
+        }
+        
+        /* Ombre inférieure pour profondeur */
+        .chat-message-assistant .bottom-shadow {
+            position: absolute;
+            bottom: -8px;
+            left: 4px;
+            right: 4px;
+            height: 8px;
+            background: linear-gradient(180deg, 
+                rgba(0, 0, 0, 0.5) 0%, 
+                rgba(0, 0, 0, 0.8) 100%);
+            border-radius: 0 0 12px 12px;
+            filter: blur(4px);
+            z-index: -1;
+        }
+        
+        /* Reflet lumineux sur le dessus */
+        .chat-message-assistant .light-reflection {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 50%;
+            background: linear-gradient(180deg, 
+                rgba(255, 255, 255, 0.05) 0%, 
+                transparent 100%);
+            border-radius: 16px 16px 0 0;
+            pointer-events: none;
+        }
+        
+        /* En-tête de la carte */
+        .message-header {
+            position: relative;
+            z-index: 1;
+            display: flex; 
+            align-items: center; 
+            margin-bottom: 1.5rem; 
+            gap: 0.75rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid rgba(0, 255, 136, 0.2);
+        }
+        
+        .chat-k-logo {
+            font-size: 2rem; 
+            font-weight: 900;
+            background: linear-gradient(135deg, #00ff88 0%, #00ffff 50%, #0088ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: pulse3D 2s ease-in-out infinite;
+            filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.5));
+            transform: translateZ(20px);
+        }
+        
+        .ai-title {
+            color: #00ff88; 
+            font-size: 1.2rem;
+            text-shadow: 
+                0 0 10px rgba(0, 255, 136, 0.5),
+                0 2px 4px rgba(0, 0, 0, 0.5);
+            transform: translateZ(10px);
+        }
+        
+        .badge {
+            margin-left: auto;
+            padding: 0.4rem 1rem;
+            background: linear-gradient(135deg, 
+                rgba(0, 255, 136, 0.2) 0%, 
+                rgba(0, 136, 255, 0.2) 100%);
+            border: 1px solid rgba(0, 255, 136, 0.4);
+            border-radius: 25px;
+            font-size: 0.8rem;
+            color: #00ff88;
+            font-weight: 600;
+            box-shadow: 
+                0 4px 8px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+            transform: translateZ(15px);
+        }
+        
+        /* Contenu de la réponse */
+        .response-content {
+            position: relative;
+            z-index: 1;
+            line-height: 1.8;
+            color: #e0e0e0;
+            font-size: 1.05rem;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+            transform: translateZ(5px);
+        }
+        
+        .response-content h2 {
+            color: #00ff88;
+            margin: 1.5rem 0 1rem 0;
+            font-size: 1.6rem;
+            text-shadow: 0 0 15px rgba(0, 255, 136, 0.5);
+        }
+        
+        .response-content h3 {
+            color: #00ddff;
+            margin: 1.2rem 0 0.8rem 0;
+            font-size: 1.3rem;
+        }
+        
+        .response-content p {
+            margin: 1rem 0;
+        }
+        
+        .response-content ul {
+            list-style: none;
+            padding-left: 1.5rem;
+        }
+        
+        .response-content li {
+            margin: 0.5rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+        }
+        
+        .response-content li:before {
+            content: "•";
+            position: absolute;
+            left: 0;
+            color: #00ff88;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+        
+        @keyframes slideIn3D {
+            0% { 
+                transform: perspective(1000px) rotateX(10deg) translateY(20px); 
+                opacity: 0; 
+            }
+            100% { 
+                transform: perspective(1000px) rotateX(2deg) translateY(0); 
+                opacity: 1; 
+            }
+        }
+        
+        @keyframes pulse3D {
+            0%, 100% { 
+                transform: translateZ(20px) scale(1); 
+                filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.5));
+            }
+            50% { 
+                transform: translateZ(25px) scale(1.05); 
+                filter: drop-shadow(0 0 20px rgba(0, 255, 136, 0.8));
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 Kibali AI - Prévisualisation Carte 3D</h1>
+        
+        <div class="info-box">
+            <h3>✅ Tests Backend Validés</h3>
+            <ul>
+                <li>Toutes les balises HTML correctement fermées (6 div)</li>
+                <li>CSS intégré avec balises &lt;style&gt;</li>
+                <li>Animations slideIn3D et pulse3D définies</li>
+                <li>Propriétés 3D: perspective, rotateX, translateZ, preserve-3d</li>
+                <li>7 couches de box-shadow pour effet de profondeur</li>
+                <li>Accolades échappées pour f-string Python</li>
+                <li>Séparation correcte contenu/style</li>
+            </ul>
+        </div>
+        
+        <!-- Message Utilisateur -->
+        <div class="chat-message-user">
+            <div class="top-slice"></div>
+            <strong>👤 Vous:</strong><br>fais moi des recherches sur KAT VR et donne moi des infos avec images
+        </div>
+        
+        <!-- Message Assistant avec Dalle Épaisse 3D -->
+        <div class="chat-message-assistant">
+            <div class="top-slice"></div>
+            <div class="bottom-shadow"></div>
+            <div class="light-reflection"></div>
+            
+            <div class="message-header">
+                <span class="chat-k-logo">K</span>
+                <strong class="ai-title">Kibali AI</strong>
+                <span class="badge">🤖 Réponse enrichie</span>
+            </div>
+            
+            <div class="response-content">
+                <h2>Introduction 🌐</h2>
+                <p>KAT VR est une entreprise pionnière dans le développement de matériel et de logiciel virtuel réalité (VR), fondée en 2013. Son objectif principal est de fournir aux utilisateurs de la réalité virtuelle une expérience immersivement réaliste et sécuritaire. Avec plus de 20 brevets indépendants détenus à l'échelle mondiale, KAT VR se distingue par ses innovations dans divers domaines de recherche tels que la technologie d'interaction virtuelle, la conception ergonomique et la technologie de capture de mouvement.</p>
+                
+                <h3>Distribution Mondiale 🗺️</h3>
+                <p>KAT VR est distribué dans de nombreux pays, notamment :</p>
+                <ul>
+                    <li>États-Unis</li>
+                    <li>Allemagne</li>
+                    <li>France</li>
+                    <li>Royaume-Uni</li>
+                    <li>Australie</li>
+                    <li>Canada</li>
+                    <li>Moyen-Orient</li>
+                    <li>Corée du Sud</li>
+                    <li>Japon</li>
+                    <li>Hong Kong</li>
+                    <li>Taïwan</li>
+                </ul>
+                
+                <h3>Technologies Innovantes 💡</h3>
+                <p><strong>Flagship Product : Le Tapis Roulant VR</strong></p>
+                <p>Le produit phare de KAT VR est leur tapis roulant VR, qui permet aux utilisateurs de marcher et de courir dans un environnement virtuel sans être limités par l'espace physique. Cette innovation révolutionne l'expérience VR en offrant une liberté de mouvement totale et une immersion accrue.</p>
+                
+                <p><strong>Autres Technologies Clés</strong></p>
+                <ul>
+                    <li><strong>Technologie d'Interaction Virtuelle :</strong> KAT VR développe des interfaces utilisateur avancées pour améliorer l'interactivité dans les mondes virtuels.</li>
+                    <li><strong>Conception Ergonomique :</strong> La société met l'accent sur la création de dispositifs confortables et sûrs pour les utilisateurs pendant de longues périodes.</li>
+                    <li><strong>Capture de Mouvement :</strong> Des capteurs précis sont intégrés pour suivre les mouvements des utilisateurs avec précision, augmentant ainsi la réalisme de l'expérience VR.</li>
+                </ul>
+                
+                <h2>Conclusion 🎯</h2>
+                <p>En résumé, KAT VR est une entreprise leader dans le domaine de la réalité virtuelle, connue pour ses innovations en matière de tapis roulants VR et autres technologies. Avec sa présence mondiale et son engagement envers la sécurité et l'immersion, KAT VR continue d'ouvrir la voie à de nouvelles possibilités dans le monde de la réalité virtuelle. 🌟</p>
+                
+                <p style="margin-top: 2rem; padding-top: 1rem; border-top: 1px solid rgba(0, 255, 136, 0.2);">
+                    <strong>📚 Sources consultées:</strong><br>
+                    <small style="color: #888;">
+                        • https://www.kat-vr.com/pages/kat-vr-learn-more<br>
+                        • https://synthesisvr.com/katvr/
+                    </small>
+                </p>
+            </div>
+        </div>
+        
+        <div class="info-box" style="margin-top: 2rem;">
+            <h3>📐 Spécifications Techniques</h3>
+            <ul>
+                <li>Box-shadow: 7 couches (ombres principales, secondaires, lueur, insets, côtés)</li>
+                <li>Transform: perspective(1000px) rotateX(2deg)</li>
+                <li>Border-image: Gradient vertical vert</li>
+                <li>Backdrop-filter: blur(10px)</li>
+                <li>Animations: slideIn3D (0.5s) + pulse3D (2s infinite)</li>
+                <li>Z-index layers: -1 (ombre) → 1 (contenu) → 20 (logo K)</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
