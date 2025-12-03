@@ -111,6 +111,15 @@ from langchain.agents import initialize_agent, Tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from transformers import CLIPProcessor, CLIPModel, AutoTokenizer, AutoModelForCausalLM
+
+# Import de l'outil d'organisation Excel avec IA
+try:
+    from tools.excel_ai_organizer import organize_excel_with_ai, ExcelAIOrganizer
+    EXCEL_AI_AVAILABLE = True
+except ImportError:
+    EXCEL_AI_AVAILABLE = False
+    print("⚠️ Excel AI Organizer non disponible")
+
 try:
     from transformers import pipeline
 except ImportError:
@@ -281,11 +290,8 @@ CONTEXTE UTILISATEUR: {user_message}
 def load_local_llm_model():
     """Charge le modèle Qwen2.5-1.5B depuis kibali_data/models"""
     
-    print(f"🚀 Chargement de {QWEN_MODEL_NAME}...")
+    print(f"🚀 Chargement de {QWEN_MODEL_NAME} en mode LOCAL...")
     print(f"📁 Cache: {QWEN_CACHE_DIR}")
-    
-    # Récupérer le token depuis les variables d'environnement
-    hf_token = os.getenv("HF_TOKEN", "")
     
     # Détection GPU optimisée
     device = 'cpu'
@@ -299,20 +305,15 @@ def load_local_llm_model():
     else:
         print("🖥️ Utilisation du CPU")
    
-    # Obtenir les paramètres selon le mode (online/offline)
-    loading_params = get_model_loading_params()
-    mode = offline_manager.get_mode()
+    print(f"🌐 Mode: LOCAL UNIQUEMENT (pas de téléchargement)")
     
-    print(f"🌐 Mode de chargement: {mode}")
-    
-    # Charger tokenizer avec fallback automatique
-    tokenizer, token_mode = load_model_with_fallback(
+    # Charger tokenizer en mode LOCAL uniquement
+    tokenizer = AutoTokenizer.from_pretrained(
         QWEN_MODEL_NAME,
-        QWEN_CACHE_DIR,
-        AutoTokenizer.from_pretrained,
+        cache_dir=str(QWEN_CACHE_DIR),
         trust_remote_code=True,
         use_fast=True,
-        **loading_params
+        local_files_only=True
     )
     
     # Corriger le problème du pad_token = eos_token pour éviter les warnings
@@ -321,29 +322,27 @@ def load_local_llm_model():
    
     # Configuration optimisée selon le device
     if device == 'cuda':
-        model, model_mode = load_model_with_fallback(
+        model = AutoModelForCausalLM.from_pretrained(
             QWEN_MODEL_NAME,
-            QWEN_CACHE_DIR,
-            AutoModelForCausalLM.from_pretrained,
+            cache_dir=str(QWEN_CACHE_DIR),
             device_map="auto",
             torch_dtype=torch.float16,
             trust_remote_code=True,
             low_cpu_mem_usage=True,
-            **loading_params
+            local_files_only=True
         )
     else:
-        model, model_mode = load_model_with_fallback(
+        model = AutoModelForCausalLM.from_pretrained(
             QWEN_MODEL_NAME,
-            QWEN_CACHE_DIR,
-            AutoModelForCausalLM.from_pretrained,
+            cache_dir=str(QWEN_CACHE_DIR),
             torch_dtype=torch.float32,
             trust_remote_code=True,
             low_cpu_mem_usage=True,
-            **loading_params
+            local_files_only=True
         )
         model = model.to(device)
    
-    print(f"✅ Qwen chargé (mode: {model_mode})")
+    print(f"✅ Qwen chargé en mode LOCAL")
     
     return tokenizer, model, device, gpu_info
 # ===============================================
@@ -467,7 +466,9 @@ def process_pdfs():
     """Traiter les PDFs"""
     print("📄 Traitement des PDFs...")
     embedding_model = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
+        model_kwargs={'local_files_only': True}
     )
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -543,7 +544,9 @@ def load_vectordb():
     """Charger la base vectorielle"""
     try:
         embedding_model = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+            model_name="sentence-transformers/all-MiniLM-L6-v2",
+            cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
+            model_kwargs={'local_files_only': True}
         )
         
         # Vérifier si la base existe
@@ -673,62 +676,65 @@ def create_client():
 # ===============================================
 @st.cache_resource
 def load_vision_models():
-    """Charge les modèles CLIP depuis le cache local avec support offline"""
+    """Charge les modèles CLIP depuis le cache LOCAL UNIQUEMENT (pas de téléchargement)"""
     try:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
-        # Obtenir les paramètres selon le mode (online/offline)
-        loading_params = get_model_loading_params()
-        
-        # Charger CLIP pour analyse sémantique
-        print("📦 Chargement du modèle CLIP...")
+        print("📦 Chargement CLIP en mode LOCAL UNIQUEMENT...")
         print(f"📁 Cache: {CLIP_CACHE_DIR}")
-        print(f"🌐 Mode: {offline_manager.get_mode()}")
         
-        clip_model, mode = load_model_with_fallback(
+        # Vérifier que le cache existe
+        if not CLIP_CACHE_DIR.exists():
+            print(f"❌ Cache introuvable: {CLIP_CACHE_DIR}")
+            return None
+        
+        # Charger UNIQUEMENT depuis le cache local (pas de connexion Internet)
+        clip_model = CLIPModel.from_pretrained(
             CLIP_MODEL_NAME,
-            CLIP_CACHE_DIR,
-            CLIPModel.from_pretrained,
-            **loading_params
+            cache_dir=str(CLIP_CACHE_DIR),
+            local_files_only=True  # FORCER le mode offline
         )
+        clip_processor = CLIPProcessor.from_pretrained(
+            CLIP_MODEL_NAME,
+            cache_dir=str(CLIP_CACHE_DIR),
+            local_files_only=True  # FORCER le mode offline
+        )
+        
         clip_model = clip_model.to(device)
         
-        clip_processor, _ = load_model_with_fallback(
-            CLIP_MODEL_NAME,
-            CLIP_CACHE_DIR,
-            CLIPProcessor.from_pretrained,
-            **loading_params
-        )
-        
-        print(f"✅ Modèle CLIP chargé sur {device} (mode: {mode})")
+        print(f"✅ CLIP chargé depuis cache LOCAL sur {device}")
         
         return {
             'clip_model': clip_model,
             'clip_processor': clip_processor,
             'device': device,
-            'mode': mode
+            'mode': 'offline'
         }
     except Exception as e:
-        print(f"⚠️ Erreur chargement modèles vision: {e}")
+        print(f"❌ Erreur chargement CLIP: {e}")
+        print(f"💡 Les modèles CLIP doivent être dans: {CLIP_CACHE_DIR}")
         return None
 
 @st.cache_resource
 def load_ocr_reader():
-    """Charge le lecteur OCR EasyOCR avec cache centralisé"""
+    """Charge le lecteur OCR EasyOCR en mode LOCAL uniquement"""
     try:
         if easyocr:
-            print("📦 Chargement du modèle OCR EasyOCR...")
+            print("📦 Chargement OCR en mode LOCAL...")
             print(f"📁 Cache: {EASYOCR_MODEL_DIR}")
             
-            # Créer le dossier s'il n'existe pas
-            EASYOCR_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+            # Vérifier que le cache existe
+            if not EASYOCR_MODEL_DIR.exists():
+                print(f"❌ Cache OCR introuvable: {EASYOCR_MODEL_DIR}")
+                return None
             
             reader = easyocr.Reader(
                 EASYOCR_LANGUAGES, 
                 gpu=torch.cuda.is_available(),
-                model_storage_directory=str(EASYOCR_MODEL_DIR)
+                model_storage_directory=str(EASYOCR_MODEL_DIR),
+                download_enabled=False  # Désactiver le téléchargement
             )
-            print("✅ Modèle OCR chargé")
+            print("✅ OCR chargé en mode LOCAL")
             return reader
         else:
             print("⚠️ EasyOCR non installé")
@@ -1131,37 +1137,32 @@ def generate_answer_enhanced(question, context_docs, model_name, include_sources
         context_parts = []
         local_sources = []
         web_sources = []
-        for i, doc in enumerate(context_docs):
+        for i, doc in enumerate(context_docs[:2]):  # LIMITER À 2 DOCS MAX
             source = doc.metadata.get('source', 'Document inconnu')
             doc_type = doc.metadata.get('type', 'unknown')
             search_source = doc.metadata.get('search_source', 'unknown')
-            content = doc.page_content.strip()
+            content = doc.page_content.strip()[:800]  # LIMITER CHAQUE DOC À 800 CHARS
             # Classifier les sources
             if search_source == 'local_rag':
                 local_sources.append(f"[{i+1}] {source} ({doc_type})")
             else:
                 web_sources.append(f"[{i+1}] {source}")
-            context_parts.append(f"[Source {i+1} - {doc_type}]\n{content}")
-        context = "\n\n".join(context_parts)
-    # Prompt amélioré avec instructions pour les sources
-    prompt = f"""Tu es un assistant IA intelligent qui répond aux questions en utilisant à la fois des documents locaux et des informations web récentes.
-CONTEXTE DISPONIBLE:
+            context_parts.append(f"[{i+1}] {content}")
+        context = "\n".join(context_parts)[:1500]  # LIMITER CONTEXTE TOTAL À 1500 CHARS
+    # Prompt ultra-compact
+    prompt = f"""CONTEXTE:
 {context}
-QUESTION: {question}
-INSTRUCTIONS:
-- Utilise toutes les sources disponibles pour donner une réponse complète et précise
-- Si les informations web contredisent les documents locaux, mentionne les deux perspectives
-- Privilégie les informations récentes pour les sujets d'actualité
-- Sois précis et cite tes sources si nécessaire
-- Si certaines informations manquent, dis-le clairement
-RÉPONSE DÉTAILLÉE:"""
+
+Q: {question[:300]}
+
+Réponds concis."""
     try:
         client = create_client()
-        messages = [{"role": "user", "content": prompt}]
+        messages = [{"role": "user", "content": prompt[:2000]}]  # LIMITER À 2000 CHARS
         response = client.chat.completions.create(
             model=model_name,
             messages=messages,
-            max_tokens=600,
+            max_tokens=400,  # RÉDUIRE DE 600 À 400
             temperature=0.3
         )
         answer = response.choices[0].message.content
@@ -1212,7 +1213,7 @@ def final_search(question, vectordb, graph, pois):
 # Fonctions Modèles Hugging Face Spécialisés
 # ===============================================
 def initialize_specialized_models():
-    """Initialise les modèles spécialisés avec gestion d'erreurs"""
+    """Initialise les modèles spécialisés en mode LOCAL uniquement"""
     models = {}
     
     # Vérifier si pipeline est disponible
@@ -1225,15 +1226,31 @@ def initialize_specialized_models():
             'ner': None
         }
     
+    print("🌐 Mode: LOCAL UNIQUEMENT (pas de téléchargement)")
+    
     try:
-        models['summarizer'] = pipeline("summarization", model=SUMMARIZER_MODEL, cache_dir=str(SUMMARIZER_CACHE))
-        print("✅ Modèle de résumé chargé")
+        models['summarizer'] = pipeline(
+            "summarization", 
+            model=SUMMARIZER_MODEL, 
+            cache_dir=str(SUMMARIZER_CACHE),
+            device_map="auto" if torch.cuda.is_available() else "cpu",
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            local_files_only=True
+        )
+        print("✅ Summarizer chargé en mode LOCAL")
     except Exception as e:
         print(f"⚠️ Erreur chargement summarizer: {e}")
         models['summarizer'] = None
     try:
-        models['translator'] = pipeline("translation", model=TRANSLATOR_MODEL, cache_dir=str(TRANSLATOR_CACHE))
-        print("✅ Modèle de traduction chargé")
+        models['translator'] = pipeline(
+            "translation", 
+            model=TRANSLATOR_MODEL, 
+            cache_dir=str(TRANSLATOR_CACHE),
+            device_map="auto" if torch.cuda.is_available() else "cpu",
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            local_files_only=True
+        )
+        print("✅ Translator chargé en mode LOCAL")
     except Exception as e:
         print(f"⚠️ Erreur chargement translator: {e}")
         models['translator'] = None
@@ -1244,8 +1261,8 @@ def initialize_specialized_models():
         print(f"⚠️ Erreur chargement captioner: {e}")
         models['captioner'] = None
     try:
-        models['ner'] = pipeline("ner", model=NER_MODEL, cache_dir=str(NER_CACHE))
-        print("✅ Modèle NER chargé")
+        models['ner'] = pipeline("ner", model=NER_MODEL, cache_dir=str(NER_CACHE), local_files_only=True)
+        print("✅ NER chargé en mode LOCAL")
     except Exception as e:
         print(f"⚠️ Erreur chargement NER: {e}")
         models['ner'] = None
@@ -1465,6 +1482,55 @@ def create_enhanced_agent(model_name, vectordb, graph, pois):
                 description="Génère un modèle 3D (rendue image) à partir d'une image. Fournis le chemin vers un fichier image."
             ),
         ]
+        
+        # Ajouter l'outil Excel AI si disponible
+        if EXCEL_AI_AVAILABLE:
+            def excel_ai_wrapper(query: str) -> str:
+                """Wrapper pour l'outil Excel AI"""
+                try:
+                    # Parser la requête (peut être JSON ou texte structuré)
+                    import json
+                    try:
+                        data = json.loads(query)
+                    except:
+                        # Si pas JSON, créer un DataFrame depuis le texte
+                        lines = [l.strip() for l in query.split('\n') if l.strip()]
+                        data = {'data': lines}
+                    
+                    # Organiser avec l'IA
+                    excel_bytes, report = organize_excel_with_ai(
+                        data,
+                        filename="ai_organized_data.xlsx",
+                        add_charts=True,
+                        add_conditional_formatting=True
+                    )
+                    
+                    # Sauvegarder temporairement
+                    from pathlib import Path
+                    temp_path = Path("temp_excel_ai_output.xlsx")
+                    temp_path.write_bytes(excel_bytes)
+                    
+                    return f"✅ Fichier Excel organisé avec IA créé !\n\nRapport:\n{json.dumps(report, indent=2, ensure_ascii=False)}\n\nFichier sauvegardé: {temp_path.absolute()}"
+                except Exception as e:
+                    return f"❌ Erreur lors de l'organisation Excel: {str(e)}"
+            
+            tools.append(
+                Tool(
+                    name="Excel_AI_Organizer",
+                    func=excel_ai_wrapper,
+                    description="""Organise automatiquement des données dans un fichier Excel avec IA ultra-précise. 
+                    Détecte et structure automatiquement:
+                    - Coordonnées GPS (latitude/longitude)
+                    - Données géospatiales
+                    - Données financières
+                    - Données scientifiques
+                    - Listes d'invités/événements
+                    - Tableaux de tout type
+                    Ajoute formatage conditionnel, graphiques, et classifications dynamiques.
+                    Fournis les données en JSON ou texte structuré."""
+                )
+            )
+        
         # Configuration de l'agent avec prompt personnalisé
         agent_prompt = """Tu es Kibali, un assistant IA avancé avec accès à de multiples sources d'information.
 CAPACITÉS DISPONIBLES:
@@ -1474,6 +1540,8 @@ CAPACITÉS DISPONIBLES:
 - Analyse d'images et extraction de contenu web
 - Traduction et résumé automatiques
 - Génération d'images, vidéos, sons et modèles 3D à partir de texte ou images
+- Organisation intelligente de fichiers Excel avec IA ultra-précise (coordonnées GPS, classifications dynamiques, tableaux structurés)
+
 INSTRUCTIONS IMPORTANTES:
 1. Utilise TOUJOURS la base locale en premier pour les questions sur des documents spécifiques
 2. Combine les sources locales ET web pour des réponses complètes
@@ -1482,6 +1550,8 @@ INSTRUCTIONS IMPORTANTES:
 5. Si les informations se contredisent, mentionne les deux perspectives
 6. Reste concis mais informatif
 7. Pour les générations, sauvegarde les fichiers et retourne le chemin
+8. Pour organiser des données Excel, utilise Excel_AI_Organizer avec des données structurées (coordonnées, listes, tableaux)
+
 Tu as accès aux outils suivants: {tools}
 Utilise le format suivant:
 Question: la question d'entrée
@@ -1684,11 +1754,20 @@ def fig_to_pil(fig):
     plt.close(fig)
     return Image.open(buf)
 def df_to_html(df, max_rows=10):
+    """Convertit DataFrame en HTML avec styles blanc gras visibles"""
     # Réduire le tableau si trop long
     if len(df) > max_rows:
         summary_row = pd.DataFrame({col: ['...'] for col in df.columns})
         df = pd.concat([df.head(max_rows // 2), summary_row, df.tail(max_rows // 2)])
-    return df.to_html(index=False, escape=False)
+    
+    # Générer HTML avec styles inline
+    html = df.to_html(index=False, escape=False, border=0)
+    html = html.replace('<table', '<table style="width: 100%; border-collapse: collapse; margin: 1rem 0; background: rgba(58, 58, 94, 0.3);"')
+    html = html.replace('<thead>', '<thead style="background: rgba(0, 255, 136, 0.2);">')
+    html = html.replace('<th>', '<th style="color: white !important; font-weight: 700 !important; padding: 0.75rem; border: 1px solid #5a5a8a; text-align: left;">')
+    html = html.replace('<td>', '<td style="color: white !important; font-weight: 600 !important; padding: 0.75rem; border: 1px solid #5a5a8a;">')
+    html = html.replace('<tr>', '<tr style="background: rgba(74, 74, 126, 0.2);">')
+    return html
 # ===============================================
 # Fonctions Image Analysis
 # ===============================================
@@ -1746,44 +1825,128 @@ def simulate_infrared(image: np.ndarray):
     mean_intensity = np.mean(gray)
     ir_analysis = f"Simulation IR: Intensité moyenne {mean_intensity:.2f} (plus rouge = plus chaud, bleu = plus froid)"
     return ir_pil, ir_analysis
-def detect_objects(image: np.ndarray, scale_factor=0.1):
+def detect_objects(image: np.ndarray, scale_factor=0.1, vision_models=None):
+    """Détecte et analyse les objets dans l'image avec description IA contextuelle"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     img_with_contours = image.copy()
-    dimensions = []
-    types = []
-    for cnt in contours:
+    
+    objects_data = []
+    
+    for idx, cnt in enumerate(contours):
         x, y, w, h = cv2.boundingRect(cnt)
-        if w < 10 or h < 10: continue  # skip small
-        cv2.rectangle(img_with_contours, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        if w < 10 or h < 10: 
+            continue  # skip small
+        
+        # Découper l'objet pour analyse IA
+        object_roi = image[y:y+h, x:x+w]
+        
+        # Analyse contextuelle avec IA si disponible
+        if vision_models:
+            try:
+                # Sauvegarder temporairement l'objet
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                    object_pil = Image.fromarray(cv2.cvtColor(object_roi, cv2.COLOR_BGR2RGB))
+                    object_pil.save(tmp.name)
+                    
+                    # Analyser avec CLIP
+                    caption, results = analyze_image_with_clip(tmp.name, vision_models)
+                    
+                    if results and len(results) > 0:
+                        obj_type = results[0]['label']
+                        confidence = results[0]['confidence']
+                    else:
+                        obj_type = 'Objet non identifié'
+                        confidence = 0.0
+                    
+                    import os
+                    os.unlink(tmp.name)
+            except:
+                # Fallback sur analyse traditionnelle
+                aspect = w / h if h != 0 else 0
+                if aspect > 5: 
+                    obj_type = 'Structure linéaire (route/chemin)'
+                elif aspect < 0.2: 
+                    obj_type = 'Structure verticale (clôture/poteau)'
+                elif 0.5 < aspect < 2: 
+                    obj_type = 'Structure carrée (bâtiment/zone)'
+                else: 
+                    obj_type = 'Structure irrégulière'
+                confidence = 0.5
+        else:
+            # Fallback sur analyse traditionnelle
+            aspect = w / h if h != 0 else 0
+            if aspect > 5: 
+                obj_type = 'Structure linéaire (route/chemin)'
+            elif aspect < 0.2: 
+                obj_type = 'Structure verticale (clôture/poteau)'
+            elif 0.5 < aspect < 2: 
+                obj_type = 'Structure carrée (bâtiment/zone)'
+            else: 
+                obj_type = 'Structure irrégulière'
+            confidence = 0.5
+        
+        # Calculs métriques réels
         w_m = w * scale_factor
         h_m = h * scale_factor
-        aspect = w / h if h != 0 else 0
-        if aspect > 5: obj_type = 'Route'
-        elif aspect < 0.2: obj_type = 'Clôture'
-        elif 0.5 < aspect < 2: obj_type = 'Bâtiment'
-        else: obj_type = 'Autre'
-        dimensions.append((w_m, h_m))
-        types.append(obj_type)
-        cv2.putText(img_with_contours, f"{obj_type}: {w_m:.4f}m x {h_m:.4f}m", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-    num_objects = len(contours)
-    fig, ax = plt.subplots(figsize=(10, 10))
+        area_m2 = w_m * h_m
+        perimeter_m = 2 * (w_m + h_m)
+        
+        # Analyse de couleur dominante
+        mean_color = cv2.mean(object_roi)[:3]
+        color_desc = f"RGB({int(mean_color[2])},{int(mean_color[1])},{int(mean_color[0])})"
+        
+        # Stocker les données
+        objects_data.append({
+            'id': idx + 1,
+            'type': obj_type,
+            'confidence': confidence,
+            'width_m': w_m,
+            'height_m': h_m,
+            'area_m2': area_m2,
+            'perimeter_m': perimeter_m,
+            'color': color_desc,
+            'position': (x, y)
+        })
+        
+        # Dessiner sur l'image
+        cv2.rectangle(img_with_contours, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        label = f"#{idx+1}: {obj_type[:20]}"
+        cv2.putText(img_with_contours, label, (x, y-10), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        cv2.putText(img_with_contours, f"{w_m:.2f}x{h_m:.2f}m", (x, y+h+20),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+    
+    # Créer la visualisation
+    fig, ax = plt.subplots(figsize=(12, 12))
     ax.imshow(cv2.cvtColor(img_with_contours, cv2.COLOR_BGR2RGB))
-    ax.set_title(f"Objets Détectés avec Contours ({num_objects})")
+    ax.set_title(f"Objets Détectés avec Analyse IA Contextuelle ({len(objects_data)} objets)", 
+                fontsize=14, fontweight='bold', color='white')
     ax.axis('off')
     obj_img = fig_to_pil(fig)
-    if dimensions:
-        dim_df = pd.DataFrame({
-            'Type': types,
-            'Largeur (m)': [d[0] for d in dimensions],
-            'Hauteur (m)': [d[1] for d in dimensions],
-            'Explication': ['Dimension estimée avec contours OpenCV' for _ in types]
+    
+    # Créer le tableau HTML des objets avec analyses complètes
+    if objects_data:
+        dim_df = pd.DataFrame(objects_data)
+        dim_df = dim_df.rename(columns={
+            'id': 'ID',
+            'type': 'Type d\'objet (IA)',
+            'confidence': 'Confiance IA',
+            'width_m': 'Largeur (m)',
+            'height_m': 'Hauteur (m)',
+            'area_m2': 'Surface (m²)',
+            'perimeter_m': 'Périmètre (m)',
+            'color': 'Couleur dominante'
         })
+        dim_df['Confiance IA'] = dim_df['Confiance IA'].apply(lambda x: f"{x*100:.1f}%")
+        dim_df = dim_df.drop('position', axis=1)
         dim_html = df_to_html(dim_df)
     else:
         dim_html = ""
-    return num_objects, obj_img, dim_html
+    
+    return len(objects_data), obj_img, dim_html, objects_data
 def detect_fences(image: np.ndarray, scale_factor=0.1):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 100, 200)
@@ -1879,67 +2042,81 @@ def advanced_analyses(image: np.ndarray):
     hydro_df = pd.DataFrame({'Métrique': ['Pourcentage Eau'], 'Valeur': [water_area], 'Explication': ['Zone potentielle pour ressources hydriques']})
     adv_tables.append(df_to_html(hydro_df))
     return analyses, {}, adv_images, adv_tables
-def process_image(uploaded_file):
+def process_image(uploaded_file, vision_models=None):
+    """Traite l'image avec analyse IA avancée et contextuelle"""
     image = Image.open(BytesIO(uploaded_file))
     img_array = np.array(image)
     proc_images = [image]
     captions = ['Image Originale']
     tables_html = []
+    
     # IR
     ir_pil, ir_analysis = simulate_infrared(img_array)
     proc_images.append(ir_pil)
     captions.append('Simulation Infrarouge')
-    tables_html.append('<h3>Analyse IR</h3><p>' + ir_analysis + '</p>')
+    tables_html.append('<h3 style="color: white; font-weight: bold;">Analyse IR</h3><p style="color: white; font-weight: 600;">' + ir_analysis + '</p>')
+    
     # Soil
     soil, hist_img, metrics_html = classify_soil(img_array)
     proc_images.append(hist_img)
     captions.append('Histogramme HSV')
-    tables_html.append('<h3>Métriques Sol</h3>' + metrics_html)
-    # Objects
-    num_objects, obj_img, dim_html = detect_objects(img_array)
+    tables_html.append('<h3 style="color: white; font-weight: bold;">Métriques Sol</h3>' + metrics_html.replace('<td>', '<td style="color: white; font-weight: 600;">').replace('<th>', '<th style="color: white; font-weight: bold;">'))
+    
+    # Objects avec analyse IA
+    num_objects, obj_img, dim_html, objects_data = detect_objects(img_array, vision_models=vision_models)
     proc_images.append(obj_img)
-    captions.append('Objets Détectés')
+    captions.append('Objets Détectés + IA')
     if dim_html:
-        tables_html.append('<h3>Dimensions Objets</h3>' + dim_html)
+        tables_html.append('<h3 style="color: white; font-weight: bold;">Objets Identifiés par IA</h3>' + dim_html.replace('<td>', '<td style="color: white; font-weight: 600;">').replace('<th>', '<th style="color: white; font-weight: bold;">'))
+    
     # Fences
     num_fences, fence_img, fence_html = detect_fences(img_array)
     proc_images.append(fence_img)
     captions.append('Clôtures Détectées')
     if fence_html:
-        tables_html.append('<h3>Longueurs Clôtures</h3>' + fence_html)
+        tables_html.append('<h3 style="color: white; font-weight: bold;">Longueurs Clôtures</h3>' + fence_html.replace('<td>', '<td style="color: white; font-weight: 600;">').replace('<th>', '<th style="color: white; font-weight: bold;">'))
+    
     # Anomalies
     anomalies, var_hist_img, anomaly_html, anomaly_desc_html = detect_anomalies(img_array)
     proc_images.append(var_hist_img)
     captions.append('Histogramme Variances')
-    tables_html.append('<h3>Métriques Anomalies</h3>' + anomaly_html)
+    tables_html.append('<h3 style="color: white; font-weight: bold;">Métriques Anomalies</h3>' + anomaly_html.replace('<td>', '<td style="color: white; font-weight: 600;">').replace('<th>', '<th style="color: white; font-weight: bold;">'))
+    
     # Advanced
     analyses, predictions, adv_images, adv_tables = advanced_analyses(img_array)
-    proc_images += adv_images[:5] # Limiter le nombre d'images
+    proc_images += adv_images[:5]
     captions += ['Analyse Avancée'] * len(adv_images[:5])
-    tables_html += adv_tables[:3] # Limiter le nombre de tableaux
+    # Appliquer style blanc gras aux tableaux avancés
+    adv_tables_styled = [t.replace('<td>', '<td style="color: white; font-weight: 600;">').replace('<th>', '<th style="color: white; font-weight: bold;">') for t in adv_tables[:3]]
+    tables_html += adv_tables_styled
+    
     analysis_data = {
         "soil": soil,
         "ir_analysis": ir_analysis,
         "num_objects": num_objects,
+        "objects_detected": objects_data,
         "num_fences": num_fences,
         "anomalies": anomalies,
         "analyses": analyses,
         "predictions": predictions
     }
+    
     tables_str = '<br>'.join(tables_html)
     return analysis_data, proc_images, tables_str
 def improve_analysis_with_llm(analysis_data, model_name):
-    prompt = f"""Analyse les données suivantes de l'image et fournis une analyse naturelle améliorée:
-DONNÉES:
-{json.dumps(analysis_data, indent=2)}
-ANALYSE AMÉLIORÉE:"""
+    # LIMITER LA TAILLE DES DONNÉES
+    data_str = json.dumps(analysis_data, indent=2)[:1000]  # MAX 1000 CHARS
+    prompt = f"""Analyse:
+{data_str}
+
+Réponds concis."""
     try:
         client = create_client()
-        messages = [{"role": "user", "content": prompt}]
+        messages = [{"role": "user", "content": prompt[:1500]}]  # LIMITER À 1500
         response = client.chat.completions.create(
             model=model_name,
             messages=messages,
-            max_tokens=800,
+            max_tokens=400,  # RÉDUIRE DE 800 À 400
             temperature=0.5
         )
         return response.choices[0].message.content
@@ -1950,50 +2127,201 @@ ANALYSE AMÉLIORÉE:"""
 # ===============================================
 def main():
     """Interface Streamlit unifiée avec recherche web intégrée"""
+    
+    # ===============================================
+    # SYSTÈME DE PALETTES DE COULEURS DYNAMIQUES
+    # ===============================================
+    if 'color_theme' not in st.session_state:
+        st.session_state.color_theme = 'ocean_blue'  # Mode sombre bleu par défaut
+    
+    # Définition des palettes
+    COLOR_THEMES = {
+        'kibali_classic': {
+            'name': '🟢 Kibali Classic',
+            'primary': '#00ff88',
+            'secondary': '#0088ff',
+            'accent': '#ffd700',
+            'bg_dark': '#1a1a2e',
+            'bg_darker': '#0f0f23',
+            'bg_light': '#2a2a4e',
+            'bg_lighter': '#3a3a5e',
+            'bg_accent': '#4a4a7e',
+            'border': '#5a5a8a',
+            'text': '#ffffff',
+            'text_secondary': '#e0e0e0',
+            'text_muted': '#b0b0b0',
+            'input_bg': '#3a3a5e',
+            'input_text': '#ffffff'
+        },
+        'ocean_blue': {
+            'name': '🌊 Ocean Blue',
+            'primary': '#00d4ff',
+            'secondary': '#0066ff',
+            'accent': '#00ffff',
+            'bg_dark': '#0a1628',
+            'bg_darker': '#050b14',
+            'bg_light': '#1a2d4e',
+            'bg_lighter': '#2a3d6e',
+            'bg_accent': '#3a4d8e',
+            'border': '#4a5daa',
+            'text': '#ffffff',
+            'text_secondary': '#cfe0ff',
+            'text_muted': '#8fa9d4',
+            'input_bg': '#2a3d6e',
+            'input_text': '#ffffff'
+        },
+        'sunset_orange': {
+            'name': '🌅 Sunset Orange',
+            'primary': '#ff6b35',
+            'secondary': '#ff9f1c',
+            'accent': '#ffcf00',
+            'bg_dark': '#2e1a0a',
+            'bg_darker': '#1a0f05',
+            'bg_light': '#4e2a1a',
+            'bg_lighter': '#6e3a2a',
+            'bg_accent': '#8e4a3a',
+            'border': '#ae5a4a',
+            'text': '#ffffff',
+            'text_secondary': '#ffe0d0',
+            'text_muted': '#d4a590',
+            'input_bg': '#6e3a2a',
+            'input_text': '#ffffff'
+        },
+        'purple_dream': {
+            'name': '💜 Purple Dream',
+            'primary': '#a855f7',
+            'secondary': '#8b5cf6',
+            'accent': '#ec4899',
+            'bg_dark': '#1e0a2e',
+            'bg_darker': '#0f0514',
+            'bg_light': '#2e1a4e',
+            'bg_lighter': '#3e2a6e',
+            'bg_accent': '#4e3a8e',
+            'border': '#5e4aaa',
+            'text': '#ffffff',
+            'text_secondary': '#e0cfff',
+            'text_muted': '#a98fd4',
+            'input_bg': '#3e2a6e',
+            'input_text': '#ffffff'
+        },
+        'forest_green': {
+            'name': '🌲 Forest Green',
+            'primary': '#10b981',
+            'secondary': '#059669',
+            'accent': '#34d399',
+            'bg_dark': '#0a2e1a',
+            'bg_darker': '#05140a',
+            'bg_light': '#1a4e2a',
+            'bg_lighter': '#2a6e3a',
+            'bg_accent': '#3a8e4a',
+            'border': '#4aae5a',
+            'text': '#ffffff',
+            'text_secondary': '#d0ffe0',
+            'text_muted': '#90d4a5',
+            'input_bg': '#2a6e3a',
+            'input_text': '#ffffff'
+        },
+        'ruby_red': {
+            'name': '💎 Ruby Red',
+            'primary': '#ef4444',
+            'secondary': '#dc2626',
+            'accent': '#f87171',
+            'bg_dark': '#2e0a0a',
+            'bg_darker': '#140505',
+            'bg_light': '#4e1a1a',
+            'bg_lighter': '#6e2a2a',
+            'bg_accent': '#8e3a3a',
+            'border': '#ae4a4a',
+            'text': '#ffffff',
+            'text_secondary': '#ffd0d0',
+            'text_muted': '#d49090',
+            'input_bg': '#6e2a2a',
+            'input_text': '#ffffff'
+        },
+        'gold_luxury': {
+            'name': '✨ Gold Luxury',
+            'primary': '#fbbf24',
+            'secondary': '#f59e0b',
+            'accent': '#fde047',
+            'bg_dark': '#2e1e0a',
+            'bg_darker': '#140f05',
+            'bg_light': '#4e3e1a',
+            'bg_lighter': '#6e5e2a',
+            'bg_accent': '#8e7e3a',
+            'border': '#ae9e4a',
+            'text': '#ffffff',
+            'text_secondary': '#fff0d0',
+            'text_muted': '#d4c590',
+            'input_bg': '#6e5e2a',
+            'input_text': '#ffffff'
+        },
+        'cyber_neon': {
+            'name': '🔮 Cyber Neon',
+            'primary': '#ff00ff',
+            'secondary': '#00ffff',
+            'accent': '#ffff00',
+            'bg_dark': '#1a0a2e',
+            'bg_darker': '#0a0514',
+            'bg_light': '#2a1a4e',
+            'bg_lighter': '#3a2a6e',
+            'bg_accent': '#4a3a8e',
+            'border': '#5a4aaa',
+            'text': '#ffffff',
+            'text_secondary': '#ffcfff',
+            'text_muted': '#cf8fff',
+            'input_bg': '#3a2a6e',
+            'input_text': '#ffffff'
+        }
+    }
+    
+    # Récupérer le thème actuel
+    theme = COLOR_THEMES[st.session_state.color_theme]
 
     # ===============================================
     # CSS PERSONNALISÉ - DESIGN PUISSANT ET FLUIDE
     # ===============================================
-    st.markdown("""
+    st.markdown(f"""
     <style>
     /* Import Google Fonts */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-    /* Variables CSS pour les couleurs Kibali - Version améliorée et moins sombre */
-    :root {
-        --kibali-green: #00ff88;
-        --kibali-yellow: #ffd700;
-        --kibali-blue: #0088ff;
-        --kibali-dark: #1a1a2e;        /* Plus clair que #0a0a0a */
-        --kibali-darker: #0f0f23;     /* Plus clair que #050505 */
-        --kibali-light: #2a2a4e;      /* Plus clair que #1a1a1a */
-        --kibali-lighter: #3a3a5e;    /* Nouvelle couleur pour les cartes */
-        --kibali-accent: #4a4a7e;     /* Accent color */
-        --kibali-border: #5a5a8a;     /* Bordures plus douces */
-        --kibali-text: #ffffff;
-        --kibali-text-secondary: #e0e0e0;  /* Plus clair pour meilleure lisibilité */
-        --kibali-text-muted: #b0b0b0;      /* Nouveau pour texte moins important */
+    /* Variables CSS pour les couleurs - DYNAMIQUES */
+    :root {{{{{{{{
+        --kibali-green: {theme['primary']};
+        --kibali-yellow: {theme['accent']};
+        --kibali-blue: {theme['secondary']};
+        --kibali-dark: {theme['bg_dark']};
+        --kibali-darker: {theme['bg_darker']};
+        --kibali-light: {theme['bg_light']};
+        --kibali-lighter: {theme['bg_lighter']};
+        --kibali-accent: {theme['bg_accent']};
+        --kibali-border: {theme['border']};
+        --kibali-text: {theme['text']};
+        --kibali-text-secondary: {theme['text_secondary']};
+        --kibali-text-muted: {theme['text_muted']};
+        --kibali-input-bg: {theme['input_bg']};
+        --kibali-input-text: {theme['input_text']};
         --gradient-primary: linear-gradient(135deg, var(--kibali-green), var(--kibali-blue));
         --gradient-secondary: linear-gradient(135deg, var(--kibali-yellow), var(--kibali-green));
         --gradient-background: linear-gradient(135deg, var(--kibali-dark), var(--kibali-darker));
-        --shadow-glow: 0 0 20px rgba(0, 255, 136, 0.3);
+        --shadow-glow: 0 0 20px rgba({int(theme['primary'][1:3], 16)}, {int(theme['primary'][3:5], 16)}, {int(theme['primary'][5:7], 16)}, 0.3);
         --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.2);
         --shadow-subtle: 0 2px 8px rgba(0, 0, 0, 0.1);
-    }
+    }}}}}}}}
 
     /* Reset et base - Version améliorée */
-    * {
+    * {{{{
         font-family: 'Inter', sans-serif !important;
-    }
+    }}}}
 
     /* Fond principal avec gradient subtil et texture */
-    .main {
+    .main {{{{
         background: var(--gradient-background) !important;
         background-attachment: fixed !important;
         position: relative;
-    }
+    }}}}
 
-    .main::before {
+    .main::before {{{{
         content: '';
         position: fixed;
         top: 0;
@@ -2001,19 +2329,19 @@ def main():
         right: 0;
         bottom: 0;
         background:
-            radial-gradient(circle at 20% 80%, rgba(0, 255, 136, 0.03) 0%, transparent 50%),
-            radial-gradient(circle at 80% 20%, rgba(0, 136, 255, 0.03) 0%, transparent 50%),
-            radial-gradient(circle at 40% 40%, rgba(255, 215, 0, 0.02) 0%, transparent 50%);
+            radial-gradient(circle at 20% 80%, rgba({int(theme['primary'][1:3], 16)}, {int(theme['primary'][3:5], 16)}, {int(theme['primary'][5:7], 16)}, 0.03) 0%, transparent 50%),
+            radial-gradient(circle at 80% 20%, rgba({int(theme['secondary'][1:3], 16)}, {int(theme['secondary'][3:5], 16)}, {int(theme['secondary'][5:7], 16)}, 0.03) 0%, transparent 50%),
+            radial-gradient(circle at 40% 40%, rgba({int(theme['accent'][1:3], 16)}, {int(theme['accent'][3:5], 16)}, {int(theme['accent'][5:7], 16)}, 0.02) 0%, transparent 50%);
         pointer-events: none;
         z-index: -1;
-    }
+    }}}}
 
-    .stApp {
+    .stApp {{{{
         background: transparent !important;
-    }
+    }}}}
 
     /* Logo Kibali animé */
-    .kibali-logo {
+    .kibali-logo {{{{
         background: var(--gradient-primary);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
@@ -2024,108 +2352,226 @@ def main():
         margin: 2rem 0;
         animation: logoGlow 3s ease-in-out infinite alternate;
         text-shadow: var(--shadow-glow);
-    }
+    }}}}
 
-    /* Nouveau logo K Kibali */
-    .kibali-k-logo {
-        font-size: 6rem;
-        font-weight: 900;
-        text-align: center;
-        margin: 1rem 0;
-        color: black; /* Texte en noir */
-        position: relative;
-        display: inline-block;
-        animation: kGlowBorder 4s ease-in-out infinite alternate, kRotate 8s linear infinite;
-        text-shadow: none; /* Supprimer l'ombre du texte */
-    }
+    /* Logo K Kibali - AMÉLIORE avec bordure scintillante - TRÈS GRAND */
+    .kibali-k-logo {{{{
+        font-size: 12rem !important; /* ENCORE PLUS ÉNORME - 192px */
+        font-weight: 900 !important;
+        text-align: center !important;
+        margin: 2rem auto !important;
+        color: #000000 !important; /* Texte en NOIR */
+        position: relative !important;
+        display: inline-block !important;
+        padding: 50px 70px !important;
+        background: #ffffff !important; /* Fond blanc pour contraste */
+        border-radius: 30px !important;
+        text-shadow: 0 4px 20px rgba(255, 255, 255, 0.8) !important;
+        min-width: 250px !important;
+        min-height: 250px !important;
+        line-height: 1 !important;
+    }}}}
 
-    .kibali-k-logo::before {
+    /* Bordure scintillante AUTOUR du K */
+    .kibali-k-logo::before {{{{
         content: '';
         position: absolute;
-        top: -10px;
-        left: -10px;
-        right: -10px;
-        bottom: -10px;
-        background: linear-gradient(45deg, var(--kibali-green), var(--kibali-yellow), var(--kibali-blue));
-        border-radius: 20px;
+        top: -5px;
+        left: -5px;
+        right: -5px;
+        bottom: -5px;
+        background: linear-gradient(45deg, 
+            var(--kibali-green), 
+            var(--kibali-yellow), 
+            var(--kibali-blue),
+            var(--kibali-green));
+        background-size: 400% 400%;
+        border-radius: 25px;
         z-index: -1;
-        opacity: 0.8;
-        animation: kBackgroundPulse 3s ease-in-out infinite alternate, kBorderShine 2s linear infinite;
-    }
+        animation: borderScintillation 3s ease infinite;
+        filter: blur(2px);
+    }}}}
+    
+    /* Animation de scintillement des bordures */
+    @keyframes borderScintillation {{{{{{{{
+        0% {{{{{{{{
+            background-position: 0% 50%;
+            filter: brightness(1.2) blur(2px);
+        }}}}}}}}
+        25% {{{{{{{{
+            background-position: 50% 100%;
+            filter: brightness(1.5) blur(3px);
+        }}}}}}}}
+        50% {{{{{{{{
+            background-position: 100% 50%;
+            filter: brightness(1.8) blur(2px);
+        }}}}}}}}
+        75% {{{{{{{{
+            background-position: 50% 0%;
+            filter: brightness(1.5) blur(3px);
+        }}}}}}}}
+        100% {{{{{{{{
+            background-position: 0% 50%;
+            filter: brightness(1.2) blur(2px);
+        }}}}}}}}
+    }}}}}}}}
+    
+    /* Effet de lueur externe */
+    .kibali-k-logo::after {{{{
+        content: '';
+        position: absolute;
+        top: -8px;
+        left: -8px;
+        right: -8px;
+        bottom: -8px;
+        background: linear-gradient(45deg,
+            rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.3),
+            rgba({int(theme["accent"][1:3], 16)}, {int(theme["accent"][3:5], 16)}, {int(theme["accent"][5:7], 16)}, 0.3),
+            rgba({int(theme["secondary"][1:3], 16)}, {int(theme["secondary"][3:5], 16)}, {int(theme["secondary"][5:7], 16)}, 0.3));
+        border-radius: 28px;
+        z-index: -2;
+        filter: blur(20px);
+        animation: glowPulse 2s ease-in-out infinite alternate;
+    }}}}}}}}
+    
+    @keyframes glowPulse {{{{{{{{
+        0% {{{{{{{{ opacity: 0.4; transform: scale(0.98); }}}}}}}}
+        100% {{{{{{{{ opacity: 0.8; transform: scale(1.02); }}}}}}}}
+    }}}}}}}}
+    
+    /* Nom KibaliOne8 IA avec effet scintillant - TRÈS GRAND */
+    .kibali-name-logo {{{{
+        font-size: 3.5rem !important; /* 56px */
+        font-weight: 900 !important;
+        text-align: center !important;
+        margin-top: 2rem !important;
+        color: #ffffff !important;
+        position: relative !important;
+        display: inline-block !important;
+        padding: 20px 50px !important;
+        background: #000000 !important;
+        border-radius: 20px !important;
+        letter-spacing: 5px !important;
+        text-shadow: 0 3px 15px rgba(0, 0, 0, 0.8) !important;
+        text-transform: uppercase !important;
+    }}}}
+    
+    /* Bordure scintillante pour le nom */
+    .kibali-name-logo::before {{{{
+        content: '';
+        position: absolute;
+        top: -4px;
+        left: -4px;
+        right: -4px;
+        bottom: -4px;
+        background: linear-gradient(45deg, 
+            var(--kibali-green), 
+            var(--kibali-yellow), 
+            var(--kibali-blue),
+            var(--kibali-green));
+        background-size: 400% 400%;
+        border-radius: 18px;
+        z-index: -1;
+        animation: borderScintillation 3s ease infinite;
+        filter: blur(2px);
+    }}}}
+    
+    /* Lueur externe pour le nom */
+    .kibali-name-logo::after {{{{
+        content: '';
+        position: absolute;
+        top: -6px;
+        left: -6px;
+        right: -6px;
+        bottom: -6px;
+        background: linear-gradient(45deg,
+            rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.2),
+            rgba({int(theme["accent"][1:3], 16)}, {int(theme["accent"][3:5], 16)}, {int(theme["accent"][5:7], 16)}, 0.2),
+            rgba({int(theme["secondary"][1:3], 16)}, {int(theme["secondary"][3:5], 16)}, {int(theme["secondary"][5:7], 16)}, 0.2));
+        border-radius: 20px;
+        z-index: -2;
+        filter: blur(15px);
+        animation: glowPulse 2s ease-in-out infinite alternate;
+    }}}}
+    
+    @keyframes glowPulse {{{{{{{{
+        0% {{{{{{{{ opacity: 0.4; transform: scale(0.98); }}}}}}}}
+        100% {{{{{{{{ opacity: 0.8; transform: scale(1.02); }}}}}}}}
+    }}}}}}}}
 
-    @keyframes kGlow {
-        0% {
-            filter: brightness(1) drop-shadow(0 0 20px rgba(0, 255, 136, 0.5));
+    @keyframes kGlow {{{{{{{{
+        0% {{{{{{{{
+            filter: brightness(1) drop-shadow(0 0 20px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.5));
             transform: scale(1);
-        }
-        50% {
-            filter: brightness(1.3) drop-shadow(0 0 40px rgba(255, 215, 0, 0.7));
+        }}}}}}}}
+        50% {{{{{{{{
+            filter: brightness(1.3) drop-shadow(0 0 40px rgba({int(theme["accent"][1:3], 16)}, {int(theme["accent"][3:5], 16)}, {int(theme["accent"][5:7], 16)}, 0.7));
             transform: scale(1.05);
-        }
-        100% {
-            filter: brightness(1) drop-shadow(0 0 30px rgba(0, 136, 255, 0.6));
+        }}}}}}}}
+        100% {{{{{{{{
+            filter: brightness(1) drop-shadow(0 0 30px rgba({int(theme["secondary"][1:3], 16)}, {int(theme["secondary"][3:5], 16)}, {int(theme["secondary"][5:7], 16)}, 0.6));
             transform: scale(1);
-        }
-    }
+        }}}}}}}}
+    }}}}}}}}
 
-    @keyframes kGlowBorder {
-        0% {
-            filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.8));
-        }
-        33% {
-            filter: drop-shadow(0 0 15px rgba(255, 215, 0, 0.9));
-        }
-        66% {
-            filter: drop-shadow(0 0 20px rgba(0, 136, 255, 0.8));
-        }
-        100% {
-            filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.8));
-        }
-    }
+    @keyframes kGlowBorder {{{{{{{{
+        0% {{{{{{{{
+            filter: drop-shadow(0 0 10px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.8));
+        }}}}}}}}
+        33% {{{{{{{{
+            filter: drop-shadow(0 0 15px rgba({int(theme["accent"][1:3], 16)}, {int(theme["accent"][3:5], 16)}, {int(theme["accent"][5:7], 16)}, 0.9));
+        }}}}}}}}
+        66% {{{{{{{{
+            filter: drop-shadow(0 0 20px rgba({int(theme["secondary"][1:3], 16)}, {int(theme["secondary"][3:5], 16)}, {int(theme["secondary"][5:7], 16)}, 0.8));
+        }}}}}}}}
+        100% {{{{{{{{
+            filter: drop-shadow(0 0 10px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.8));
+        }}}}}}}}
+    }}}}}}}}
 
-    @keyframes kBorderShine {
-        0% {
+    @keyframes kBorderShine {{{{{{{{
+        0% {{{{{{{{
             background: linear-gradient(45deg, var(--kibali-green), var(--kibali-yellow), var(--kibali-blue));
             opacity: 0.6;
-        }
-        25% {
+        }}}}}}}}
+        25% {{{{{{{{
             background: linear-gradient(45deg, var(--kibali-yellow), var(--kibali-blue), var(--kibali-green));
             opacity: 0.8;
-        }
-        50% {
+        }}}}}}}}
+        50% {{{{{{{{
             background: linear-gradient(45deg, var(--kibali-blue), var(--kibali-green), var(--kibali-yellow));
             opacity: 1.0;
-        }
-        75% {
+        }}}}}}}}
+        75% {{{{{{{{
             background: linear-gradient(45deg, var(--kibali-green), var(--kibali-blue), var(--kibali-yellow));
             opacity: 0.8;
-        }
-        100% {
+        }}}}}}}}
+        100% {{{{{{{{
             background: linear-gradient(45deg, var(--kibali-yellow), var(--kibali-green), var(--kibali-blue));
             opacity: 0.6;
-        }
-    }
+        }}}}}}}}
+    }}}}}}}}
 
-    @keyframes kRotate {
-        0% { transform: rotateY(0deg); }
-        25% { transform: rotateY(5deg); }
-        50% { transform: rotateY(0deg); }
-        75% { transform: rotateY(-5deg); }
-        100% { transform: rotateY(0deg); }
-    }
+    @keyframes kRotate {{{{{{{{
+        0% {{{{{{{{ transform: rotateY(0deg); }}}}}}}}
+        25% {{{{{{{{ transform: rotateY(5deg); }}}}}}}}
+        50% {{{{{{{{ transform: rotateY(0deg); }}}}}}}}
+        75% {{{{{{{{ transform: rotateY(-5deg); }}}}}}}}
+        100% {{{{{{{{ transform: rotateY(0deg); }}}}}}}}
+    }}}}}}}}
 
-    @keyframes kBackgroundPulse {
-        0% { opacity: 0.1; transform: scale(1); }
-        100% { opacity: 0.3; transform: scale(1.1); }
-    }
+    @keyframes kBackgroundPulse {{{{{{{{
+        0% {{{{{{{{ opacity: 0.1; transform: scale(1); }}}}}}}}
+        100% {{{{{{{{ opacity: 0.3; transform: scale(1.1); }}}}}}}}
+    }}}}}}}}
 
-    @keyframes logoGlow {
-        0% { filter: brightness(1) drop-shadow(0 0 10px rgba(0, 255, 136, 0.5)); }
-        100% { filter: brightness(1.2) drop-shadow(0 0 20px rgba(0, 255, 136, 0.8)); }
-    }
+    @keyframes logoGlow {{{{{{{{
+        0% {{{{{{{{ filter: brightness(1) drop-shadow(0 0 10px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.5)); }}}}}}}}
+        100% {{{{{{{{ filter: brightness(1.2) drop-shadow(0 0 20px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.8)); }}}}}}}}
+    }}}}}}}}
 
     /* Header principal - Version améliorée */
-    .main-header {
+    .main-header {{{{
         background: linear-gradient(135deg, var(--kibali-light), var(--kibali-accent));
         padding: 2rem;
         border-radius: 20px;
@@ -2134,9 +2580,9 @@ def main():
         box-shadow: var(--shadow-subtle);
         position: relative;
         overflow: hidden;
-    }
+    }}}}
 
-    .main-header::before {
+    .main-header::before {{{{
         content: '';
         position: absolute;
         top: 0;
@@ -2145,15 +2591,15 @@ def main():
         height: 4px;
         background: var(--gradient-primary);
         animation: headerShine 4s ease-in-out infinite;
-    }
+    }}}}
 
-    @keyframes headerShine {
-        0%, 100% { transform: translateX(-100%); }
-        50% { transform: translateX(100%); }
-    }
+    @keyframes headerShine {{{{{{{{
+        0%, 100% {{{{{{{{ transform: translateX(-100%); }}}}}}}}
+        50% {{{{{{{{ transform: translateX(100%); }}}}}}}}
+    }}}}}}}}
 
     /* Cartes flex responsive - Version améliorée */
-    .kibali-card {
+    .kibali-card {{{{
         background: var(--kibali-lighter);
         border: 1px solid var(--kibali-border);
         border-radius: 16px;
@@ -2163,31 +2609,72 @@ def main():
         box-shadow: var(--shadow-subtle);
         position: relative;
         overflow: hidden;
-    }
+    }}}}
+    
+    /* Tout le texte dans les cartes en blanc gras */
+    .kibali-card,
+    .kibali-card p,
+    .kibali-card h1,
+    .kibali-card h2,
+    .kibali-card h3,
+    .kibali-card h4,
+    .kibali-card h5,
+    .kibali-card span,
+    .kibali-card div,
+    .kibali-card td,
+    .kibali-card th,
+    .kibali-card li {{{{
+        color: white !important;
+        font-weight: 600 !important;
+    }}}}
+    
+    .kibali-card h1,
+    .kibali-card h2,
+    .kibali-card h3 {{{{
+        font-weight: 700 !important;
+    }}}}
+    
+    .kibali-card table {{{{
+        color: white !important;
+        background: rgba({int(theme["bg_light"][1:3], 16)}, {int(theme["bg_light"][3:5], 16)}, {int(theme["bg_light"][5:7], 16)}, 0.5) !important;
+    }}}}
+    
+    .kibali-card th {{{{
+        background: rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.2) !important;
+        color: white !important;
+        font-weight: 700 !important;
+        border: 1px solid var(--kibali-border) !important;
+    }}}}
+    
+    .kibali-card td {{{{
+        border: 1px solid var(--kibali-border) !important;
+        color: white !important;
+        font-weight: 600 !important;
+    }}}}
 
-    .kibali-card::before {
+    .kibali-card::before {{{{
         content: '';
         position: absolute;
         top: 0;
         left: -100%;
         width: 100%;
         height: 100%;
-        background: linear-gradient(90deg, transparent, rgba(0, 255, 136, 0.1), transparent);
+        background: linear-gradient(90deg, transparent, rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.1), transparent);
         transition: left 0.5s;
-    }
+    }}}}
 
-    .kibali-card:hover {
+    .kibali-card:hover {{{{
         transform: translateY(-8px) scale(1.02);
         box-shadow: var(--shadow-card);
         border-color: var(--kibali-green);
-    }
+    }}}}
 
-    .kibali-card:hover::before {
+    .kibali-card:hover::before {{{{
         left: 100%;
-    }
+    }}}}
 
     /* Boutons stylisés */
-    .kibali-btn {
+    .kibali-btn {{{{
         background: var(--gradient-primary);
         color: white !important;
         border: none;
@@ -2197,12 +2684,12 @@ def main():
         font-size: 1rem;
         cursor: pointer;
         transition: all 0.3s ease;
-        box-shadow: 0 4px 16px rgba(0, 255, 136, 0.3);
+        box-shadow: 0 4px 16px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.3);
         position: relative;
         overflow: hidden;
-    }
+    }}}}
 
-    .kibali-btn::before {
+    .kibali-btn::before {{{{
         content: '';
         position: absolute;
         top: 0;
@@ -2211,31 +2698,31 @@ def main():
         height: 100%;
         background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
         transition: left 0.5s;
-    }
+    }}}}
 
-    .kibali-btn:hover {
+    .kibali-btn:hover {{{{
         transform: translateY(-2px);
-        box-shadow: 0 8px 24px rgba(0, 255, 136, 0.5);
-    }
+        box-shadow: 0 8px 24px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.5);
+    }}}}
 
-    .kibali-btn:hover::before {
+    .kibali-btn:hover::before {{{{
         left: 100%;
-    }
+    }}}}
 
-    .kibali-btn:active {
+    .kibali-btn:active {{{{
         transform: translateY(0);
-    }
+    }}}}
 
     /* Onglets personnalisés - Version améliorée */
-    .stTabs [data-baseweb="tab-list"] {
+    .stTabs [data-baseweb="tab-list"] {{{{
         gap: 8px;
         background: var(--kibali-light);
         padding: 8px;
         border-radius: 12px;
         border: 1px solid var(--kibali-border);
-    }
+    }}}}
 
-    .stTabs [data-baseweb="tab"] {
+    .stTabs [data-baseweb="tab"] {{{{
         background: var(--kibali-accent);
         border-radius: 8px;
         color: var(--kibali-text-secondary);
@@ -2243,35 +2730,35 @@ def main():
         border: none;
         padding: 12px 20px;
         font-weight: 500;
-    }
+    }}}}
 
-    .stTabs [data-baseweb="tab"]:hover {
+    .stTabs [data-baseweb="tab"]:hover {{{{
         background: var(--kibali-lighter);
         color: var(--kibali-text);
         transform: translateY(-2px);
         box-shadow: var(--shadow-subtle);
-    }
+    }}}}
 
-    .stTabs [aria-selected="true"] {
+    .stTabs [aria-selected="true"] {{{{
         background: var(--gradient-primary) !important;
         color: white !important;
         box-shadow: var(--shadow-glow);
         transform: translateY(-2px);
-    }
+    }}}}
 
     /* Chat messages - Version améliorée */
-    .chat-message-user {
+    .chat-message-user {{{{
         background: linear-gradient(135deg, var(--kibali-blue), var(--kibali-green));
         color: white;
         padding: 1rem 1.5rem;
         border-radius: 16px 16px 4px 16px;
         margin: 0.5rem 0;
-        box-shadow: 0 4px 16px rgba(0, 136, 255, 0.3);
+        box-shadow: 0 4px 16px rgba({int(theme["secondary"][1:3], 16)}, {int(theme["secondary"][3:5], 16)}, {int(theme["secondary"][5:7], 16)}, 0.3);
         animation: slideInLeft 0.5s ease-out;
-        border: 1px solid rgba(0, 136, 255, 0.2);
-    }
+        border: 1px solid rgba({int(theme["secondary"][1:3], 16)}, {int(theme["secondary"][3:5], 16)}, {int(theme["secondary"][5:7], 16)}, 0.2);
+    }}}}
 
-    .chat-message-assistant {
+    .chat-message-assistant {{{{
         background: var(--kibali-lighter);
         color: var(--kibali-text);
         padding: 1rem 1.5rem;
@@ -2281,30 +2768,49 @@ def main():
         box-shadow: var(--shadow-subtle);
         animation: slideInRight 0.5s ease-out;
         border: 1px solid var(--kibali-border);
-    }
+    }}}}
 
-    @keyframes slideInLeft {
-        from { transform: translateX(-20px); opacity: 0; }
-        to { transform: translateX(0); opacity: 1; }
-    }
+    @keyframes slideInLeft {{{{{{{{
+        from {{{{{{{{ transform: translateX(-20px); opacity: 0; }}}}}}}}
+        to {{{{{{{{ transform: translateX(0); opacity: 1; }}}}}}}}
+    }}}}}}}}
 
-    @keyframes slideInRight {
-        from { transform: translateX(20px); opacity: 0; }
-        to { transform: translateX(0); opacity: 1; }
-    }
+    @keyframes slideInRight {{{{{{{{
+        from {{{{{{{{ transform: translateX(20px); opacity: 0; }}}}}}}}
+        to {{{{{{{{ transform: translateX(0); opacity: 1; }}}}}}}}
+    }}}}}}}}
 
-    /* Input fields - Version améliorée */
-    .stTextInput input, .stTextArea textarea, .stSelectbox select {
-        background: var(--kibali-accent) !important;
-        border: 1px solid var(--kibali-border) !important;
+    /* Input fields - TEXTE BLANC VISIBLE */
+    .stTextInput input, .stTextArea textarea, .stSelectbox select {{{{
+        background: var(--kibali-input-bg) !important;
+        border: 2px solid var(--kibali-border) !important;
         border-radius: 12px !important;
-        color: var(--kibali-text) !important;
-        padding: 12px 16px !important;
-        font-size: 1rem !important;
+        color: var(--kibali-input-text) !important;
+        padding: 14px 18px !important;
+        font-size: 1.1rem !important;
+        font-weight: 600 !important;
         transition: all 0.3s ease !important;
         position: relative !important;
         z-index: 1 !important;
-    }
+    }}}}
+    
+    /* FORCER LE TEXTE BLANC PARTOUT */
+    input, textarea, select {{{{
+        color: #ffffff !important;
+        -webkit-text-fill-color: #ffffff !important;
+    }}}}
+    
+    /* Input du chat principal - ULTRA VISIBLE */
+    [data-testid="stChatInput"] input,
+    [data-testid="stChatInput"] textarea {{{{
+        background: #6B46C1 !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
+        font-size: 1.1rem !important;
+        padding: 16px 20px !important;
+        border: 2px solid var(--kibali-green) !important;
+        -webkit-text-fill-color: #ffffff !important;
+    }}}}
     
     /* Labels styling - Éviter le chevauchement */
     .stTextInput label,
@@ -2312,7 +2818,7 @@ def main():
     .stSelectbox label,
     .stNumberInput label,
     .stFileUploader label,
-    [data-testid="stWidgetLabel"] {
+    [data-testid="stWidgetLabel"] {{{{
         color: var(--kibali-text-secondary) !important;
         font-weight: 500 !important;
         margin-bottom: 0.5rem !important;
@@ -2322,61 +2828,61 @@ def main():
         padding: 0 !important;
         width: 100% !important;
         text-align: left !important;
-    }
+    }}}}
     
     /* Container pour éviter superposition */
     .stTextInput > div,
     .stTextArea > div,
     .stNumberInput > div,
     .stSelectbox > div,
-    .stFileUploader > div {
+    .stFileUploader > div {{{{
         display: flex !important;
         flex-direction: column !important;
         gap: 0.25rem !important;
-    }
+    }}}}
     
     /* Forcer la séparation label/input */
     .stTextInput > div > div,
     .stTextArea > div > div,
-    .stNumberInput > div > div {
+    .stNumberInput > div > div {{{{
         display: block !important;
         position: relative !important;
-    }
+    }}}}
     
     /* S'assurer que le label est au-dessus */
     .stTextInput > div > label,
     .stTextArea > div > label,
     .stNumberInput > div > label,
-    .stSelectbox > div > label {
+    .stSelectbox > div > label {{{{
         order: -1 !important;
         margin-bottom: 0.5rem !important;
-    }
+    }}}}
     
     /* Placeholder styling */
     .stTextInput input::placeholder,
-    .stTextArea textarea::placeholder {
+    .stTextArea textarea::placeholder {{{{
         color: var(--kibali-text-muted) !important;
         opacity: 0.6 !important;
-    }
+    }}}}
     
     /* Hide placeholder when input has focus or value */
     .stTextInput input:focus::placeholder,
-    .stTextArea textarea:focus::placeholder {
+    .stTextArea textarea:focus::placeholder {{{{
         opacity: 0.3 !important;
-    }
+    }}}}
 
-    .stTextInput input:focus, .stTextArea textarea:focus, .stSelectbox select:focus {
+    .stTextInput input:focus, .stTextArea textarea:focus, .stSelectbox select:focus {{{{
         border-color: var(--kibali-green) !important;
-        box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.2) !important;
+        box-shadow: 0 0 0 2px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.2) !important;
         transform: scale(1.02);
-    }
+    }}}}
     
     /* Chat Input - Texte blanc gras sur fond violet */
-    [data-testid="stChatInput"] {
+    [data-testid="stChatInput"] {{{{
         position: relative !important;
-    }
+    }}}}
     
-    [data-testid="stChatInput"] input {
+    [data-testid="stChatInput"] input {{{{
         background: #6B46C1 !important;
         border: 2px solid var(--kibali-border) !important;
         border-radius: 12px !important;
@@ -2387,58 +2893,58 @@ def main():
         line-height: 1.6 !important;
         position: relative !important;
         z-index: 1 !important;
-    }
+    }}}}
     
-    [data-testid="stChatInput"] input::placeholder {
+    [data-testid="stChatInput"] input::placeholder {{{{
         color: rgba(255, 255, 255, 0.6) !important;
         opacity: 1 !important;
         font-weight: 500 !important;
         position: absolute !important;
         left: 16px !important;
         pointer-events: none !important;
-    }
+    }}}}
     
-    [data-testid="stChatInput"] input:focus {
+    [data-testid="stChatInput"] input:focus {{{{
         background: #7C3AED !important;
         border-color: var(--kibali-green) !important;
-        box-shadow: 0 0 15px rgba(0, 255, 136, 0.3) !important;
-    }
+        box-shadow: 0 0 15px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.3) !important;
+    }}}}
     
-    [data-testid="stChatInput"] input:focus::placeholder {
+    [data-testid="stChatInput"] input:focus::placeholder {{{{
         opacity: 0.3 !important;
-    }
+    }}}}
     
     /* Cacher le placeholder quand il y a du texte */
-    [data-testid="stChatInput"] input:not(:placeholder-shown)::placeholder {
+    [data-testid="stChatInput"] input:not(:placeholder-shown)::placeholder {{{{
         opacity: 0 !important;
-    }
+    }}}}
     
     /* SIDEBAR - Corrections pour éviter superposition */
-    .css-1d391kg, [data-testid="stSidebar"] {
+    .css-1d391kg, [data-testid="stSidebar"] {{{{
         background: var(--kibali-light) !important;
-    }
+    }}}}
     
     /* Texte dans la sidebar - Meilleur contraste */
-    [data-testid="stSidebar"] * {
+    [data-testid="stSidebar"] * {{{{
         color: var(--kibali-text) !important;
-    }
+    }}}}
     
     [data-testid="stSidebar"] h1,
     [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3 {
+    [data-testid="stSidebar"] h3 {{{{
         color: var(--kibali-green) !important;
         font-weight: 600 !important;
-    }
+    }}}}
     
     [data-testid="stSidebar"] p,
     [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] div {
+    [data-testid="stSidebar"] div {{{{
         color: var(--kibali-text) !important;
         font-size: 1rem !important;
-    }
+    }}}}
     
     /* Boutons dans la sidebar - Style icône */
-    [data-testid="stSidebar"] button {
+    [data-testid="stSidebar"] button {{{{
         width: 100% !important;
         margin: 0.25rem 0 !important;
         font-size: 2rem !important;
@@ -2446,70 +2952,70 @@ def main():
         background: var(--kibali-accent) !important;
         border: 2px solid var(--kibali-border) !important;
         transition: all 0.3s ease !important;
-    }
+    }}}}
     
-    [data-testid="stSidebar"] button:hover {
+    [data-testid="stSidebar"] button:hover {{{{
         background: var(--kibali-green) !important;
         transform: scale(1.05) !important;
-        box-shadow: 0 0 20px rgba(0, 255, 136, 0.5) !important;
-    }
+        box-shadow: 0 0 20px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.5) !important;
+    }}}}
     
-    [data-testid="stSidebar"] button:disabled {
+    [data-testid="stSidebar"] button:disabled {{{{
         opacity: 0.5 !important;
         cursor: not-allowed !important;
-    }
+    }}}}
     
     /* Inputs dans la sidebar - Éviter superposition */
     [data-testid="stSidebar"] .stTextInput,
     [data-testid="stSidebar"] .stNumberInput,
-    [data-testid="stSidebar"] .stSelectbox {
+    [data-testid="stSidebar"] .stSelectbox {{{{
         margin-bottom: 1rem !important;
-    }
+    }}}}
     
     [data-testid="stSidebar"] .stTextInput label,
     [data-testid="stSidebar"] .stNumberInput label,
-    [data-testid="stSidebar"] .stSelectbox label {
+    [data-testid="stSidebar"] .stSelectbox label {{{{
         display: block !important;
         margin-bottom: 0.5rem !important;
         position: static !important;
         background: transparent !important;
         padding: 0 !important;
         width: 100% !important;
-    }
+    }}}}
     
     [data-testid="stSidebar"] input,
-    [data-testid="stSidebar"] select {
+    [data-testid="stSidebar"] select {{{{
         width: 100% !important;
         display: block !important;
         margin-top: 0.5rem !important;
-    }
+    }}}}
     
     /* Colonnes dans la sidebar */
-    [data-testid="stSidebar"] [data-testid="column"] {
+    [data-testid="stSidebar"] [data-testid="column"] {{{{
         padding: 0.25rem !important;
-    }
+    }}}}
     
     /* CORRECTION GLOBALE - Empêcher toute superposition de texte */
     /* Tous les widgets Streamlit */
-    div[data-testid="stVerticalBlock"] > div {
+    div[data-testid="stVerticalBlock"] > div {{{{
         display: flex !important;
         flex-direction: column !important;
-    }
+    }}}}
     
     /* S'assurer que les labels sont toujours au-dessus */
-    label {
+    label {{{{
         position: static !important;
         display: block !important;
         margin-bottom: 0.25rem !important;
         z-index: auto !important;
-    }
+    }}}}
     
     /* Empêcher l'overlay de texte sur les inputs */
-    input, textarea, select {
+    input, textarea, select {{{{
         position: relative !important;
         z-index: 1 !important;
         background-color: var(--kibali-accent) !important;
-    }
+    }}}}
     
     /* Forcer la séparation pour tous les form elements */
     .stTextInput,
@@ -2518,32 +3024,32 @@ def main():
     .stSelectbox,
     .stMultiSelect,
     .stDateInput,
-    .stTimeInput {
+    .stTimeInput {{{{
         margin-bottom: 0.75rem !important;
-    }
+    }}}}
     
     /* Empêcher le chevauchement du placeholder avec la valeur */
-    input:not(:placeholder-shown) {
+    input:not(:placeholder-shown) {{{{
         color: var(--kibali-text) !important;
-    }
+    }}}}
     
-    input::placeholder {
+    input::placeholder {{{{
         color: var(--kibali-text-muted) !important;
         opacity: 0.5 !important;
-    }
+    }}}}
     
     /* Quand l'input a une valeur, le placeholder doit disparaître */
-    input[value]:not([value=""]) {
+    input[value]:not([value=""]) {{{{
         color: var(--kibali-text) !important;
-    }
+    }}}}
     
-    input[value]:not([value=""])::placeholder {
+    input[value]:not([value=""])::placeholder {{{{
         opacity: 0 !important;
         visibility: hidden !important;
-    }
+    }}}}
 
     /* Success/Error messages - Version améliorée avec meilleur contraste */
-    .stSuccess, .stError, .stWarning, .stInfo {
+    .stSuccess, .stError, .stWarning, .stInfo {{{{
         border-radius: 12px !important;
         border: none !important;
         padding: 1rem !important;
@@ -2552,239 +3058,246 @@ def main():
         box-shadow: var(--shadow-subtle);
         font-weight: 700 !important;
         font-size: 1.1rem !important;
-    }
+    }}}}
     
-    .stSuccess {
-        background: rgba(0, 255, 136, 0.25) !important;
+    .stSuccess {{{{
+        background: rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.25) !important;
         border-left: 4px solid var(--kibali-green) !important;
         color: #FFFFFF !important;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
-    }
+    }}}}
     
-    .stError {
+    .stError {{{{
         background: rgba(255, 107, 107, 0.25) !important;
         border-left: 4px solid #ff6b6b !important;
         color: #FFFFFF !important;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
-    }
+    }}}}
     
-    .stWarning {
-        background: rgba(255, 215, 0, 0.25) !important;
+    .stWarning {{{{
+        background: rgba({int(theme["accent"][1:3], 16)}, {int(theme["accent"][3:5], 16)}, {int(theme["accent"][5:7], 16)}, 0.25) !important;
         border-left: 4px solid var(--kibali-yellow) !important;
         color: #FFFFFF !important;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
-    }
+    }}}}
     
-    .stInfo {
-        background: rgba(0, 136, 255, 0.25) !important;
+    .stInfo {{{{
+        background: rgba({int(theme["secondary"][1:3], 16)}, {int(theme["secondary"][3:5], 16)}, {int(theme["secondary"][5:7], 16)}, 0.25) !important;
         border-left: 4px solid var(--kibali-blue) !important;
         color: #FFFFFF !important;
         text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
-    }
+    }}}}
 
     /* Messages du chat - Texte blanc gras et lisible */
-    [data-testid="stChatMessage"] {
+    [data-testid="stChatMessage"] {{{{
         background: var(--kibali-accent) !important;
         border-radius: 12px !important;
         padding: 1rem !important;
         margin: 0.5rem 0 !important;
         border: 1px solid var(--kibali-border) !important;
-    }
+    }}}}
     
     [data-testid="stChatMessage"] p,
     [data-testid="stChatMessage"] span,
-    [data-testid="stChatMessage"] div {
+    [data-testid="stChatMessage"] div {{{{
         color: #FFFFFF !important;
         font-weight: 600 !important;
         font-size: 1.05rem !important;
         line-height: 1.6 !important;
-    }
+    }}}}
     
     /* Messages utilisateur - Fond violet */
-    [data-testid="stChatMessage"][data-testid*="user"] {
+    [data-testid="stChatMessage"][data-testid*="user"] {{{{
         background: #6B46C1 !important;
         border-color: #7C3AED !important;
-    }
+    }}}}
     
     /* Messages assistant - Fond accent avec bordure verte */
-    [data-testid="stChatMessage"][data-testid*="assistant"] {
+    [data-testid="stChatMessage"][data-testid*="assistant"] {{{{
         background: var(--kibali-accent) !important;
         border-color: var(--kibali-green) !important;
-    }
+    }}}}
 
-    .stSuccess {
-        background: linear-gradient(135deg, rgba(0, 255, 136, 0.1), rgba(0, 255, 136, 0.05)) !important;
+    .stSuccess {{{{
+        background: linear-gradient(135deg, rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.1), rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.05)) !important;
         border-left: 4px solid var(--kibali-green) !important;
         color: var(--kibali-text) !important;
-    }
+    }}}}
 
-    .stError {
+    .stError {{{{
         background: linear-gradient(135deg, rgba(255, 136, 136, 0.1), rgba(255, 136, 136, 0.05)) !important;
         border-left: 4px solid #ff8888 !important;
         color: var(--kibali-text) !important;
-    }
+    }}}}
 
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(10px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
+    @keyframes fadeIn {{{{{{{{
+        from {{{{{{{{ opacity: 0; transform: translateY(10px); }}}}}}}}
+        to {{{{{{{{ opacity: 1; transform: translateY(0); }}}}}}}}
+    }}}}}}}}
 
     /* Spinner personnalisé */
-    .stSpinner > div > div {
+    .stSpinner > div > div {{{{
         border-color: var(--kibali-green) !important;
         border-top-color: transparent !important;
-    }
+    }}}}
 
     /* Images avec zoom au survol */
-    .zoom-image {
+    .zoom-image {{{{
         transition: transform 0.3s ease;
         border-radius: 12px;
         box-shadow: var(--shadow-card);
-    }
+    }}}}
 
-    .zoom-image:hover {
+    .zoom-image:hover {{{{
         transform: scale(1.05);
-    }
+    }}}}
 
     /* Progress bars */
-    .stProgress > div > div > div {
+    .stProgress > div > div > div {{{{
         background: var(--gradient-primary) !important;
-    }
+    }}}}
 
     /* Sidebar si utilisée */
-    .css-1d391kg, .css-12oz5g7 {
+    .css-1d391kg, .css-12oz5g7 {{{{
         background: var(--kibali-dark) !important;
-    }
+    }}}}
 
     /* Scrollbar personnalisée - Version améliorée */
-    ::-webkit-scrollbar {
+    ::-webkit-scrollbar {{{{
         width: 8px;
-    }
+    }}}}
 
-    ::-webkit-scrollbar-track {
+    ::-webkit-scrollbar-track {{{{
         background: var(--kibali-dark);
         border-radius: 4px;
-    }
+    }}}}
 
-    ::-webkit-scrollbar-thumb {
+    ::-webkit-scrollbar-thumb {{{{
         background: var(--gradient-primary);
         border-radius: 4px;
         border: 1px solid var(--kibali-border);
-    }
+    }}}}
 
-    ::-webkit-scrollbar-thumb:hover {
+    ::-webkit-scrollbar-thumb:hover {{{{
         background: var(--kibali-green);
         box-shadow: var(--shadow-glow);
-    }
+    }}}}
 
     /* Icônes grandes et visibles - Priorité absolue */
-    .stSuccess, .stError, .stWarning, .stInfo {
+    .stSuccess, .stError, .stWarning, .stInfo {{{{
         font-size: 2.5rem !important;
         text-align: center !important;
         padding: 1.5rem !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
-    }
+    }}}}
     
     /* Rendre les icônes emoji plus grandes partout */
-    .stButton button {
+    .stButton button {{{{
         font-size: 2rem !important;
         line-height: 1 !important;
-    }
+    }}}}
     
     /* Messages avec icônes uniquement - Pas de texte */
-    [data-testid="stMarkdownContainer"] {
+    [data-testid="stMarkdownContainer"] {{{{
         font-size: 1.2rem !important;
-    }
+    }}}}
     
     /* Expanders avec icônes */
-    .streamlit-expanderHeader {
+    .streamlit-expanderHeader {{{{
         font-size: 1.5rem !important;
         font-weight: 600 !important;
-    }
+    }}}}}}}}
 
     /* Responsive design */
-    @media (max-width: 768px) {
-        .kibali-logo {
+    @media (max-width: 768px) {{{{{{{{
+        .kibali-logo {{{{{{{{
             font-size: 2.5rem;
-        }
+        }}}}}}}}
 
-        .kibali-card {
+        .kibali-card {{{{{{{{
             padding: 1rem;
             margin: 0.5rem 0;
-        }
+        }}}}}}}}
 
-        .main-header {
+        .main-header {{{{{{{{
             padding: 1rem;
-        }
-    }
+        }}}}}}}}
+    }}}}}}}}
 
     /* Logo K pour les messages de chat */
-    .chat-k-logo {
+    .chat-k-logo {{
         display: inline-block;
         font-size: 1.2rem;
         font-weight: 900;
-        color: black;
+        color: #ffffff; /* Texte blanc */
+        background: #000000; /* Fond noir */
         position: relative;
         margin-right: 0.5rem;
-        animation: chatKBorderShine 3s ease-in-out infinite;
-    }
+        padding: 4px 8px;
+        border-radius: 6px;
+    }}
 
-    .chat-k-logo::before {
+    .chat-k-logo::before {{
         content: '';
         position: absolute;
         top: -2px;
         left: -2px;
         right: -2px;
         bottom: -2px;
-        background: linear-gradient(45deg, var(--kibali-green), var(--kibali-yellow), var(--kibali-blue));
-        border-radius: 4px;
+        background: linear-gradient(45deg, 
+            var(--kibali-green), 
+            var(--kibali-yellow), 
+            var(--kibali-blue),
+            var(--kibali-green));
+        background-size: 300% 300%;
+        border-radius: 8px;
         z-index: -1;
-        opacity: 0.7;
-        animation: chatKBackgroundPulse 2s ease-in-out infinite alternate;
-    }
+        animation: chatBorderScintillation 2s ease infinite;
+        filter: blur(1px);
+    }}
 
-    @keyframes chatKBorderShine {
-        0% {
-            filter: drop-shadow(0 0 3px rgba(0, 255, 136, 0.6));
-        }
-        33% {
-            filter: drop-shadow(0 0 5px rgba(255, 215, 0, 0.7));
-        }
-        66% {
-            filter: drop-shadow(0 0 4px rgba(0, 136, 255, 0.6));
-        }
-        100% {
-            filter: drop-shadow(0 0 3px rgba(0, 255, 136, 0.6));
-        }
-    }
+    
+        33% {{{{{{{{
+            filter: drop-shadow(0 0 5px rgba({int(theme["accent"][1:3], 16)}, {int(theme["accent"][3:5], 16)}, {int(theme["accent"][5:7], 16)}, 0.7));
+        }}}}}}}}
+        66% {{{{{{{{
+            filter: drop-shadow(0 0 4px rgba({int(theme["secondary"][1:3], 16)}, {int(theme["secondary"][3:5], 16)}, {int(theme["secondary"][5:7], 16)}, 0.6));
+        }}}}}}}}
+        100% {{{{{{{{
+            filter: drop-shadow(0 0 3px rgba({int(theme["primary"][1:3], 16)}, {int(theme["primary"][3:5], 16)}, {int(theme["primary"][5:7], 16)}, 0.6));
+        }}}}}}}}
+    }}}}}}}}
 
-    @keyframes chatKBackgroundPulse {
-        0% {
-            background: linear-gradient(45deg, var(--kibali-green), var(--kibali-yellow), var(--kibali-blue));
-            opacity: 0.5;
-        }
-        25% {
+    
+        25% {{{{{{{{
             background: linear-gradient(45deg, var(--kibali-yellow), var(--kibali-blue), var(--kibali-green));
             opacity: 0.7;
-        }
-        50% {
+        }}}}}}}}
+        50% {{{{{{{{
             background: linear-gradient(45deg, var(--kibali-blue), var(--kibali-green), var(--kibali-yellow));
             opacity: 0.8;
-        }
-        75% {
+        }}}}}}}}
+        75% {{{{{{{{
             background: linear-gradient(45deg, var(--kibali-green), var(--kibali-blue), var(--kibali-yellow));
             opacity: 0.7;
-        }
-        100% {
+        }}}}}}}}
+        100% {{{{{{{{
             background: linear-gradient(45deg, var(--kibali-yellow), var(--kibali-green), var(--kibali-blue));
             opacity: 0.5;
-        }
-    }
+        }}}}}}}}
+    }}}}}}}}
+    
+    
+    @keyframes chatBorderScintillation {{
+        0% {{ background-position: 0% 50%; }}
+        50% {{ background-position: 100% 50%; }}
+        100% {{ background-position: 0% 50%; }}
+    }}
     
     /* BOUTONS - Éviter superposition de texte */
-    button {
+    button {{{{
         white-space: nowrap !important;
         overflow: hidden !important;
         text-overflow: ellipsis !important;
@@ -2795,23 +3308,23 @@ def main():
         gap: 0.5rem !important;
         padding: 0.5rem 1rem !important;
         position: relative !important;
-    }
+    }}}}
     
-    button span {
+    button span {{{{
         display: inline-block !important;
         position: relative !important;
-    }
+    }}}}
     
     /* Désactiver tout pseudo-élément qui pourrait causer superposition */
     button::before,
-    button::after {
+    button::after {{{{
         display: none !important;
-    }
+    }}}}
     
     /* Forcer un seul layer de texte dans les boutons */
-    button * {
+    button * {{{{
         line-height: inherit !important;
-    }
+    }}}}
     
     </style>
     """, unsafe_allow_html=True)
@@ -2824,11 +3337,46 @@ def main():
 
     # Logo Kibali animé - Grand K avec les couleurs vert, jaune, bleu
     st.markdown("""
-    <div style="text-align: center; margin: 2rem 0;">
-        <div class="kibali-k-logo">K</div>
-        <div style="color: var(--kibali-text-secondary); font-size: 1.2rem; margin-top: 0.5rem; font-weight: 500;">
-            Assistant IA Avancé
-        </div>
+    <div style="text-align: center; margin: 3rem 0; padding: 2rem;">
+        <svg width="300" height="300" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg" style="display: block; margin: 0 auto;">
+          <defs>
+            <linearGradient id="sparkleGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" style="stop-color:#00ff88;stop-opacity:1" />
+              <stop offset="25%" style="stop-color:#ffff00;stop-opacity:1" />
+              <stop offset="50%" style="stop-color:#0088ff;stop-opacity:1" />
+              <stop offset="75%" style="stop-color:#00ff88;stop-opacity:1" />
+              <stop offset="100%" style="stop-color:#ffff00;stop-opacity:1" />
+            </linearGradient>
+            <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+              <feMerge>
+                <feMergeNode in="coloredBlur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
+          <rect x="10" y="10" width="280" height="280" rx="30" ry="30"
+                fill="none" stroke="url(#sparkleGradient)" stroke-width="8"
+                filter="url(#glow)">
+            <animate attributeName="stroke-dasharray" values="0,1000;500,500;0,1000" dur="3s" repeatCount="indefinite"/>
+          </rect>
+          <rect x="20" y="20" width="260" height="260" rx="25" ry="25" fill="#ffffff"/>
+          <text x="150" y="180" font-family="Arial, sans-serif" font-size="180" font-weight="900"
+                text-anchor="middle" fill="#000000" filter="url(#glow)">K</text>
+          <circle cx="50" cy="50" r="3" fill="#ffff00" opacity="0.8">
+            <animate attributeName="opacity" values="0.8;0.3;0.8" dur="2s" repeatCount="indefinite"/>
+          </circle>
+          <circle cx="250" cy="50" r="3" fill="#00ff88" opacity="0.6">
+            <animate attributeName="opacity" values="0.6;0.9;0.6" dur="2.5s" repeatCount="indefinite"/>
+          </circle>
+          <circle cx="50" cy="250" r="3" fill="#0088ff" opacity="0.7">
+            <animate attributeName="opacity" values="0.7;0.4;0.7" dur="1.8s" repeatCount="indefinite"/>
+          </circle>
+          <circle cx="250" cy="250" r="3" fill="#ffff00" opacity="0.5">
+            <animate attributeName="opacity" values="0.5;0.8;0.5" dur="2.2s" repeatCount="indefinite"/>
+          </circle>
+        </svg>
+        <div class="kibali-name-logo">KIBALIONE8 IA</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2836,7 +3384,7 @@ def main():
     st.markdown("""
     <div class="main-header">
         <h2 style="color: var(--kibali-green); margin: 0; text-align: center;">
-            🌟 Assistant IA Avancé avec Recherche Web
+            ⏩ Assistant IA Avancé avec Recherche Web
         </h2>
         <p style="color: var(--kibali-text-secondary); text-align: center; margin: 1rem 0 0 0;">
             <strong>Nouvelles fonctionnalités:</strong><br>
@@ -2845,6 +3393,41 @@ def main():
         </p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # ===============================================
+    # SÉLECTEUR DE THÈME DE COULEUR
+    # ===============================================
+    st.markdown("### 🎨 Palette de Couleurs")
+    
+    theme_names = {k: v['name'] for k, v in COLOR_THEMES.items()}
+    current_theme_name = theme_names[st.session_state.color_theme]
+    
+    selected_theme_name = st.selectbox(
+        "Choisir un thème",
+        options=list(theme_names.values()),
+        index=list(theme_names.values()).index(current_theme_name),
+        key="theme_selector"
+    )
+    
+    # Trouver la clé du thème sélectionné
+    selected_theme_key = [k for k, v in theme_names.items() if v == selected_theme_name][0]
+    
+    if selected_theme_key != st.session_state.color_theme:
+        st.session_state.color_theme = selected_theme_key
+        st.rerun()
+    
+    # Afficher les couleurs du thème actuel
+    theme_colors = COLOR_THEMES[st.session_state.color_theme]
+    st.markdown(f"""
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin: 1rem 0;">
+        <div style="background: {theme_colors['primary']}; height: 40px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>
+        <div style="background: {theme_colors['secondary']}; height: 40px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>
+        <div style="background: {theme_colors['accent']}; height: 40px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>
+        <div style="background: {theme_colors['bg_accent']}; height: 40px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"></div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
     
     # ===============================================
     # SIDEBAR - Indicateur de mode Online/Offline
@@ -2901,6 +3484,10 @@ def main():
         st.session_state.local_model_loaded = False
     if 'local_tokenizer' not in st.session_state:
         st.session_state.local_tokenizer = None
+    if 'llm_model' not in st.session_state:
+        st.session_state.llm_model = None
+    if 'llm_model' not in st.session_state:
+        st.session_state.llm_model = None
     if 'local_model' not in st.session_state:
         st.session_state.local_model = None
     if 'local_qwen_llm' not in st.session_state:
@@ -3032,6 +3619,9 @@ def main():
                     key="model_select",
                     help="Choisis le modèle d'IA pour tes réponses"
                 )
+                # Mettre à jour llm_model dans session_state
+                st.session_state.llm_model = WORKING_MODELS[model_choice]
+                st.session_state.current_model = WORKING_MODELS[model_choice]
             with col2:
                 web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, help="Active la recherche web pour des réponses plus complètes")
                 # Toggle pour le mode local
@@ -3186,73 +3776,28 @@ def main():
                             if vision_success:
                                 # Enrichir avec recherche web sur le type d'image
                                 try:
-                                    web_results = enhanced_web_search(f"analyse détaillée de: {image_caption}", max_results=3)
-                                    web_context = "\n\n".join([f"• {r.get('title', '')}: {r.get('body', '')[:200]}..." for r in web_results]) if web_results else ""
+                                    web_results = enhanced_web_search(f"analyse détaillée de: {image_caption}", max_results=2)
+                                    web_context = "\n".join([f"{r.get('title', '')[:40]}: {r.get('body', '')[:100]}" for r in web_results[:2]]) if web_results else ""
                                 except:
                                     web_context = ""
                                 
                                 # Générer analyse complète avec LLM textuel
                                 details_str = "\n".join([f"- {d['label']}: {d['confidence']:.1%}" for d in analysis_details]) if analysis_details else "Non disponibles"
                                 
-                                analysis_prompt = f"""Voici une image nommée "{img_file.name}" ({width}x{height}px, {img_format}).
+                                # PROMPT ULTRA-COMPACT
+                                analysis_prompt = f"""Image: {img_file.name[:30]} ({width}x{height})
 
-📸 Analyse automatique (modèle CLIP local):
-{image_caption}
+🤖 CLIP: {image_caption[:200]}
+📝 OCR: {extracted_text_info[:300]}
+🌐 Web: {web_context[:200] if web_context else "N/A"}
 
-🎯 Classifications détaillées:
-{details_str}
-
-📝 TEXTE EXTRAIT DE L'IMAGE (OCR):
-{extracted_text_info}
-
-🌐 Informations complémentaires du web:
-{web_context if web_context else "Non disponibles"}
-
-🎯 Ta mission: Fournis une analyse COMPLÈTE et DÉTAILLÉE comme ChatGPT:
-
-1. **Description générale approfondie**:
-   - Interprète ce que représente vraiment l'image
-   - Donne le contexte général
-   - Prends en compte le texte extrait pour enrichir ton analyse
-
-2. **Analyse du texte détecté**:
-   - Si du texte a été détecté, explique son contexte et sa signification
-   - Identifie s'il s'agit de légendes, descriptions, titres, annotations, etc.
-   - Relie le texte aux éléments visuels de l'image
-
-3. **Éléments identifiables**:
-   - Liste tous les objets, structures, éléments visibles
-   - Identifie les détails importants
-   - Corrèle avec le texte extrait si pertinent
-
-4. **Analyse du contexte**:
-   - Quel type d'image? (photo terrain, schéma technique, scan, graphique, document, etc.)
-   - Où et quand pourrait-elle avoir été prise?
-   - Le texte donne-t-il des indices supplémentaires?
-
-5. **Analyse technique et scientifique**:
-   - Si c'est une image géologique: identifie les roches, minéraux, structures
-   - Si c'est technique: explique les éléments techniques
-   - Si c'est un document: synthétise les informations textuelles
-   - Donne des détails professionnels
-
-6. **Applications pratiques**:
-   - À quoi cette image peut-elle servir?
-   - Quelles informations peut-on en extraire?
-   - Comment le texte complète-t-il l'analyse visuelle?
-
-7. **Observations spécifiques**:
-   - Détails uniques ou remarquables
-   - Éléments qui méritent attention
-   - Cohérence entre le texte et l'image
-
-Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots."""
+Analyse concise (max 150 mots):"""
 
                                 text_client = create_client()
                                 analysis_response = text_client.chat.completions.create(
                                     model=WORKING_MODELS[model_choice],
-                                    messages=[{"role": "user", "content": analysis_prompt}],
-                                    max_tokens=1200,
+                                    messages=[{"role": "user", "content": analysis_prompt[:1200]}],  # LIMITER À 1200 CHARS
+                                    max_tokens=400,  # RÉDUIRE DE 1200 À 400
                                     temperature=0.7
                                 )
                                 
@@ -3462,7 +4007,11 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                 
                 enriched_prompt = f"{prompt}\n{media_context}"
             
+            # Ajouter le message et nettoyer si trop long
             st.session_state.chat_history.append({"role": "user", "content": prompt})
+            # Garder seulement les 20 derniers messages pour éviter overflow
+            if len(st.session_state.chat_history) > 20:
+                st.session_state.chat_history = st.session_state.chat_history[-20:]
             
             # Animation de chargement
             with st.spinner("🤔 Kibali réfléchit..."):
@@ -3481,9 +4030,9 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                         web_context = ""
                         if web_enabled:
                             try:
-                                web_results = enhanced_web_search(prompt, max_results=3)
+                                web_results = enhanced_web_search(prompt, max_results=2)
                                 if web_results:
-                                    web_context = "\n\n".join([f"Web: {r.get('title', '')} - {r.get('body', '')[:300]}" for r in web_results])
+                                    web_context = "\n".join([f"{r.get('title', '')[:50]} - {r.get('body', '')[:150]}" for r in web_results[:2]])
                             except Exception as e:
                                 web_context = f"Erreur recherche web: {e}"
                         
@@ -3580,95 +4129,65 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                                 web_context = ""
                                 if web_enabled:
                                     try:
-                                        web_results = enhanced_web_search(prompt, max_results=3)
+                                        web_results = enhanced_web_search(prompt, max_results=2)
                                         if web_results:
-                                            web_context = "\n\n".join([f"🌐 {r.get('title', '')}: {r.get('body', '')}" for r in web_results])
+                                            web_context = "\n".join([f"{r.get('title', '')[:50]}: {r.get('body', '')[:100]}" for r in web_results[:2]])
                                     except Exception as e:
                                         web_context = f"Erreur recherche web: {e}"
                                 
-                                # Construction du prompt final avec médias
+                                # Construction du prompt final avec médias (VERSION RÉDUITE)
                                 full_context = ""
                                 
-                                # Ajouter contexte des médias analysés avec IA
+                                # Ajouter contexte des médias analysés avec IA (LIMITÉ)
                                 if media_analysis_results:
-                                    full_context += "═══════════════════════════════════════\n"
-                                    full_context += "📎 MÉDIAS ANALYSÉS PAR IA AVANCÉE\n"
-                                    full_context += "═══════════════════════════════════════\n\n"
+                                    full_context += "📎\n"
                                     
-                                    for media in media_analysis_results:
+                                    # Limiter à 1 seul média
+                                    for media in media_analysis_results[:1]:
                                         if media['type'] == 'image':
-                                            full_context += f"🖼️ **IMAGE: {media['name']}**\n"
-                                            full_context += f"📏 Résolution: {media.get('resolution', 'N/A')}\n"
-                                            full_context += f"🎨 Format: {media.get('format', 'N/A')}\n\n"
+                                            full_context += f"🖼️ {media['name'][:30]}\n"
                                             
                                             if 'ai_analysis' in media:
-                                                full_context += "🤖 ANALYSE IA DÉTAILLÉE:\n"
-                                                full_context += f"{media['ai_analysis']}\n\n"
+                                                # Limiter l'analyse IA à 150 caractères
+                                                full_context += f"{media['ai_analysis'][:150]}\n"
                                             
                                             if 'caption' in media:
-                                                full_context += f"📝 Description: {media['caption']}\n\n"
-                                            
-                                            if 'web_context' in media and media['web_context']:
-                                                full_context += "🌐 Informations complémentaires du web:\n"
-                                                full_context += f"{media['web_context'][:500]}...\n\n"
+                                                full_context += f"{media['caption'][:100]}\n"
                                         
                                         elif media['type'] == 'audio':
-                                            full_context += f"🎵 **AUDIO: {media['name']}**\n"
-                                            full_context += f"⏱️ Durée: {media.get('duration', 0):.2f}s\n"
-                                            full_context += f"📊 Fréquence: {media.get('sample_rate', 'N/A')} Hz\n\n"
+                                            full_context += f"🎵 {media['name']} ({media.get('duration', 0):.1f}s)\n"
                                         
                                         elif media['type'] == 'video':
-                                            full_context += f"🎥 **VIDÉO: {media['name']}**\n"
-                                            full_context += f"📐 Résolution: {media.get('resolution', 'N/A')}\n"
-                                            full_context += f"⏱️ Durée: {media.get('duration', 0):.2f}s\n"
-                                            full_context += f"🎞️ FPS: {media.get('fps', 'N/A')}\n\n"
+                                            full_context += f"🎥 {media['name']} ({media.get('duration', 0):.1f}s)\n"
                                     
-                                    full_context += "═══════════════════════════════════════\n\n"
+                                    full_context += "\n"
                                 
+                                # Limiter les autres contextes
                                 if rag_context:
-                                    full_context += f"📚 DOCUMENTS PDF TROUVÉS:\n{rag_context}\n\n"
+                                    full_context += f"📚 {rag_context[:300]}\n"
                                 if tool_results:
-                                    full_context += f"🔧 RÉSULTATS DES OUTILS:\n" + "\n\n".join(tool_results) + "\n\n"
+                                    # Limiter à 200 chars par résultat, max 1
+                                    limited_results = [r[:200] for r in tool_results[:1]]
+                                    full_context += f"🔧 " + limited_results[0] + "\n" if limited_results else ""
                                 if web_context:
-                                    full_context += f"🌐 INFORMATIONS WEB:\n{web_context}\n\n"
+                                    full_context += f"🌐 {web_context[:250]}\n"
                                 
-                                final_prompt = f"""Tu es Kibali, un assistant IA expert avec capacités d'analyse multimodale (images, texte, documents).
+                                # Prompt final ultra-compact
+                                final_prompt = f"""{full_context}
 
-{full_context}
+❓ {prompt}
 
-❓ QUESTION DE L'UTILISATEUR: {prompt}
-
-📋 INSTRUCTIONS POUR TA RÉPONSE:
-
-1. **Si une image a été analysée:**
-   - Base-toi PRIORITAIREMENT sur l'analyse IA détaillée fournie ci-dessus
-   - Réponds de manière précise et contextuelle en fonction de ce qui est visible dans l'image
-   - Cite les éléments spécifiques identifiés par l'IA
-   - Si l'image est technique/scientifique, utilise les informations web complémentaires
-
-2. **Pour les autres médias:**
-   - Intègre naturellement les informations d'audio/vidéo dans ta réponse
-   - Mentionne les métadonnées pertinentes si nécessaire
-
-3. **Pour les documents:**
-   - Si des PDFs sont trouvés, cite les sources et extrais les informations clés
-   - Combine les informations des médias avec celles des documents
-
-4. **Style de réponse:**
-   - Sois précis, professionnel et détaillé
-   - Structure ta réponse avec des emojis appropriés
-   - Ne mentionne PAS "je ne peux pas voir l'image" car l'analyse IA l'a déjà fait
-   - Réponds comme si tu avais directement accès à l'image grâce à l'analyse fournie
-
-🎯 RÉPONDS MAINTENANT:"""
+Réponds de façon concise en te basant sur les infos ci-dessus."""
                                 
-                                # Génération de la réponse finale
+                                # Génération de la réponse finale avec historique limité
                                 client = create_client()
-                                messages = [{"role": "user", "content": final_prompt}]
+                                # Limiter à 1 dernier échange (2 messages) + prompt actuel
+                                recent_msgs = st.session_state.chat_history[-2:] if len(st.session_state.chat_history) > 2 else st.session_state.chat_history
+                                messages = recent_msgs + [{"role": "user", "content": final_prompt[:1000]}]  # Limiter drastiquement à 1000 chars
                                 response_obj = client.chat.completions.create(
                                     model=WORKING_MODELS[model_choice],
                                     messages=messages,
-                                    max_tokens=800,
+                                    max_tokens=600,
                                     temperature=0.3
                                 )
                                 response = response_obj.choices[0].message.content
@@ -3730,6 +4249,9 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                                 response = f"❌ Erreur complète: {e}"
             
             st.session_state.chat_history.append({"role": "assistant", "content": response})
+            # Nettoyer l'historique si trop long
+            if len(st.session_state.chat_history) > 20:
+                st.session_state.chat_history = st.session_state.chat_history[-20:]
             st.rerun()
         
         # Boutons d'action stylisés
@@ -3818,7 +4340,7 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                             carte_buf.seek(0)
                             image = Image.open(carte_buf)
                             st.markdown('<div class="kibali-card zoom-image">', unsafe_allow_html=True)
-                            st.image(image, caption="🗺️ Carte du trajet calculé", use_column_width=True)
+                            st.image(image, caption="🗺️ Carte du trajet calculé", use_container_width=True)
                             st.markdown('</div>', unsafe_allow_html=True)
                             st.session_state.last_traj_info = traj_info
                         st.session_state.last_reponse = reponse
@@ -3861,17 +4383,41 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
         if st.button("🔍 **Analyser l'image**", key="analyze_image", help="Lance l'analyse complète de l'image avec IA"):
             if uploaded_image:
                 with st.spinner("🔬 Analyse IA en cours..."):
-                    # 1. Analyse traditionnelle (OpenCV)
-                    analysis_data, proc_images, tables_str = process_image(uploaded_image.getvalue())
+                    
+                    # Charger vision_models d'abord pour l'analyse des objets
+                    vision_models = None
+                    try:
+                        vision_models = load_vision_models()
+                    except:
+                        pass
+                    
+                    # 1. Analyse traditionnelle (OpenCV) avec IA
+                    analysis_data, proc_images, tables_str = process_image(uploaded_image.getvalue(), vision_models=vision_models)
                     
                     # 2. Analyse avancée avec Vision AI (CLIP) + OCR
                     st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
                     st.markdown("### 🤖 Analyse Vision AI + OCR")
                     
+                    # Initialiser les variables
+                    clip_analysis = {}
+                    extracted_texts = []
+                    
                     try:
                         # Charger les modèles Vision
-                        with st.spinner("📥 Chargement des modèles Vision AI..."):
-                            clip_model, clip_processor = load_vision_models()
+                        with st.spinner("📥 Chargement des modèles Vision AI (mode local prioritaire)..."):
+                            vision_models = load_vision_models()
+                            if vision_models is None:
+                                st.error("❌ Impossible de charger les modèles Vision AI")
+                                st.warning("⚠️ Les modèles CLIP ne sont pas disponibles localement")
+                                st.info(f"💡 Téléchargez les modèles avec: huggingface-cli download {CLIP_MODEL_NAME}")
+                                st.code(f"Cache attendu: {CLIP_CACHE_DIR}", language="bash")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                                st.stop()
+                            else:
+                                st.success(f"✅ Modèles Vision chargés ({vision_models['mode']}) sur {vision_models['device']}")
+                            
+                            clip_model = vision_models['clip_model']
+                            clip_processor = vision_models['clip_processor']
                         
                         # Sauvegarder l'image temporairement
                         import tempfile
@@ -3897,30 +4443,58 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                         
                         # Analyser avec CLIP
                         with st.spinner("🎨 Analyse sémantique (CLIP)..."):
-                            image_pil = Image.open(tmp_path)
-                            clip_analysis = analyze_image_with_clip(image_pil, clip_model, clip_processor)
+                            caption, results = analyze_image_with_clip(tmp_path, vision_models)
+                            
+                            if results:
+                                # Convertir en dictionnaire pour compatibilité
+                                clip_analysis = {result['label']: result['confidence'] for result in results}
                         
-                        # Afficher les résultats CLIP
-                        st.markdown("#### 🎯 Analyse sémantique (catégories détectées)")
-                        
-                        # Créer un DataFrame pour les catégories
-                        import pandas as pd
-                        categories_df = pd.DataFrame({
-                            'Catégorie': list(clip_analysis.keys()),
-                            'Score de confiance': [f"{v*100:.1f}%" for v in clip_analysis.values()]
-                        })
-                        st.dataframe(categories_df, use_container_width=True)
-                        
-                        # Visualisation graphique
-                        fig, ax = plt.subplots(figsize=(10, 6))
-                        categories = list(clip_analysis.keys())
-                        scores = [v * 100 for v in clip_analysis.values()]
-                        colors = ['#2E7D32' if s > 50 else '#FFA726' if s > 30 else '#EF5350' for s in scores]
-                        ax.barh(categories, scores, color=colors)
-                        ax.set_xlabel('Score de confiance (%)')
-                        ax.set_title('Analyse sémantique de l\'image')
-                        ax.set_xlim(0, 100)
-                        st.pyplot(fig)
+                        # Afficher les résultats CLIP avec précision et exactitude
+                        if clip_analysis:
+                            st.markdown("#### 🎯 Analyse sémantique (catégories détectées)")
+                            
+                            # Créer un DataFrame avec précision et exactitude
+                            import pandas as pd
+                            
+                            # Calculer les métriques de qualité
+                            total_confidence = sum(clip_analysis.values())
+                            max_confidence = max(clip_analysis.values())
+                            min_confidence = min(clip_analysis.values())
+                            
+                            categories_df = pd.DataFrame({
+                                'Catégorie': list(clip_analysis.keys()),
+                                'Confiance': [f"{v*100:.2f}%" for v in clip_analysis.values()],
+                                'Score normalisé': [f"{(v/max_confidence)*100:.1f}%" for v in clip_analysis.values()],
+                                'Fiabilité': ['Haute' if v > 0.5 else 'Moyenne' if v > 0.3 else 'Faible' for v in clip_analysis.values()]
+                            })
+                            
+                            st.dataframe(categories_df, use_container_width=True)
+                            
+                            # Métriques de qualité de l'analyse
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("🎯 Précision maximale", f"{max_confidence*100:.2f}%")
+                            with col2:
+                                st.metric("📉 Fiabilité moyenne", f"{(total_confidence/len(clip_analysis))*100:.2f}%")
+                            with col3:
+                                st.metric("✅ Exactitude", f"{(max_confidence/total_confidence)*100:.1f}%")
+                            
+                            # Visualisation graphique améliorée
+                            fig, ax = plt.subplots(figsize=(10, 6))
+                            categories = list(clip_analysis.keys())
+                            scores = [v * 100 for v in clip_analysis.values()]
+                            colors = ['#2E7D32' if s > 50 else '#FFA726' if s > 30 else '#EF5350' for s in scores]
+                            bars = ax.barh(categories, scores, color=colors)
+                            
+                            # Ajouter les valeurs sur les barres
+                            for i, (bar, score) in enumerate(zip(bars, scores)):
+                                ax.text(score + 1, i, f'{score:.2f}%', va='center', fontsize=9)
+                            
+                            ax.set_xlabel('Score de confiance (%)', fontsize=12)
+                            ax.set_title('Analyse sémantique de l\'image (avec précision)', fontsize=14, fontweight='bold')
+                            ax.set_xlim(0, 105)
+                            ax.grid(axis='x', alpha=0.3, linestyle='--')
+                            st.pyplot(fig)
                         
                         # Nettoyer le fichier temporaire
                         import os
@@ -3939,7 +4513,7 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                         for i, (img, caption) in enumerate(zip(proc_images, ['Image Originale'] + ['Analyse'] * (len(proc_images)-1))):
                             with cols[i % len(cols)]:
                                 st.markdown('<div class="zoom-image">', unsafe_allow_html=True)
-                                st.image(img, caption=f"📸 {caption}", use_column_width=True)
+                                st.image(img, caption=f"📸 {caption}", use_container_width=True)
                                 st.markdown('</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
                     
@@ -3954,19 +4528,60 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                     st.markdown("### 🤖 Rapport d'analyse IA complet")
                     
                     with st.spinner("✍️ Génération du rapport détaillé..."):
-                        # Combiner toutes les informations
+                        # Combiner toutes les informations avec détails scientifiques
+                        clip_info = "\n".join([f"- {cat}: {score*100:.2f}% (Précision: {score:.4f})" for cat, score in clip_analysis.items()]) if clip_analysis else "Aucune analyse CLIP disponible"
+                        
+                        # Description détaillée des objets détectés
+                        objects_description = ""
+                        if 'objects_detected' in analysis_data and analysis_data['objects_detected']:
+                            objects_description = "\n### Objets détectés avec analyse IA contextuelle:\n"
+                            for obj in analysis_data['objects_detected']:
+                                objects_description += f"""
+- **Objet #{obj['id']}**: {obj['type']}
+  - Confiance IA: {obj['confidence']*100:.1f}%
+  - Dimensions: {obj['width_m']:.2f}m x {obj['height_m']:.2f}m
+  - Surface: {obj['area_m2']:.2f} m²
+  - Périmètre: {obj['perimeter_m']:.2f} m
+  - Couleur dominante: {obj['color']}
+"""
+                        
                         combined_info = f"""
-Analyse de l'image uploadée:
+Analyse scientifique approfondie de l'image:
 
-### Vision AI (CLIP):
-{chr(10).join([f"- {cat}: {score*100:.1f}%" for cat, score in clip_analysis.items()])}
+### Vision AI (CLIP) - Analyse sémantique:
+{clip_info}
 
 ### Texte extrait (OCR):
 {organized_text if extracted_texts else "Aucun texte détecté"}
 
-### Analyses techniques (OpenCV):
-{analysis_data}
+{objects_description}
+
+### Analyses techniques complètes:
+- Nombre total d'objets: {analysis_data.get('num_objects', 0)}
+- Classification du sol: {analysis_data.get('soil', 'N/A')}
+- Clôtures détectées: {analysis_data.get('num_fences', 0)}
+- Anomalies: {', '.join(analysis_data.get('anomalies', ['Aucune']))}
+- Analyses avancées: {len(analysis_data.get('analyses', []))} métriques calculées
+
+Génère un rapport scientifique détaillé décrivant précisément ce qui est visible dans cette image,
+avec une analyse contextuelle des objets détectés et leurs caractéristiques métriques réelles.
 """
+                        
+                        # Générer le rapport avec le LLM
+                        llm_model = st.session_state.get('llm_model') or st.session_state.get('current_model')
+                        
+                        if llm_model:
+                            try:
+                                report = improve_analysis_with_llm(combined_info, llm_model)
+                                # Afficher le rapport avec style blanc gras
+                                st.markdown(f'<div style="color: white; font-weight: 600; font-size: 1.1rem; line-height: 1.8; background: rgba(74, 74, 126, 0.3); padding: 1.5rem; border-radius: 12px; border-left: 4px solid var(--kibali-green);">{report}</div>', unsafe_allow_html=True)
+                            except Exception as e:
+                                st.error(f"❌ Erreur génération rapport: {str(e)}")
+                                # Afficher au moins les données brutes
+                                st.markdown(f'<div style="color: white; font-weight: 600; font-size: 1.05rem; line-height: 1.6; background: rgba(74, 74, 126, 0.3); padding: 1.5rem; border-radius: 12px;"><pre style="color: white; white-space: pre-wrap;">{combined_info}</pre></div>', unsafe_allow_html=True)
+                        else:
+                            # Afficher les données brutes formatées si pas de LLM
+                            st.markdown(f'<div style="color: white; font-weight: 600; font-size: 1.05rem; line-height: 1.6; background: rgba(74, 74, 126, 0.3); padding: 1.5rem; border-radius: 12px;"><pre style="color: white; white-space: pre-wrap;">{combined_info}</pre></div>', unsafe_allow_html=True)
                         
                         improved_analysis = improve_analysis_with_llm(combined_info, st.session_state.current_model)
                         st.text_area("📋 Rapport complet", value=improved_analysis, height=400, disabled=True)
@@ -4164,7 +4779,7 @@ Analyse de l'image uploadée:
                             if viz_path and Path(viz_path).exists():
                                 st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
                                 st.markdown("### 📊 Visualisation de l'ordre")
-                                st.image(viz_path, caption="Ordre optimisé des photos (gauche → droite, haut → bas)", use_column_width=True)
+                                st.image(viz_path, caption="Ordre optimisé des photos (gauche → droite, haut → bas)", use_container_width=True)
                                 st.markdown('</div>', unsafe_allow_html=True)
                             
                             # Copier les photos dans l'ordre
