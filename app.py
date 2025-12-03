@@ -4790,103 +4790,103 @@ avec une analyse contextuelle des objets détectés et leurs caractéristiques m
                         status_text.text("📦 Chargement du modèle Vision AI (CLIP)...")
                         progress_bar.progress(20)
                         vision_models = load_vision_models()
-                            
-                            if vision_models is None:
-                                st.error("❌ Impossible de charger le modèle CLIP")
-                                st.stop()
-                            
-                            log_container.success(f"✅ Modèle CLIP chargé ({vision_models['device']})")
-                            progress_bar.progress(30)
-                            
-                            # Classifier avec l'IA
-                            status_text.text("🔍 Analyse Vision AI en cours...")
-                            st.info("📊 Extraction des features visuelles avec CLIP...")
-                            output_dir = temp_dir + "_classified"
-                            Path(output_dir).mkdir(exist_ok=True)
-                            
-                            # Progress callback pour le classifier
-                            def update_progress(current, total, message):
-                                pct = 30 + int((current / total) * 50)
-                                progress_bar.progress(pct)
-                                status_text.text(f"🔍 {message} ({current}/{total})")
-                            
-                            ordered_paths, report, viz_path = classify_photos_with_ai(
-                                photo_paths,
-                                vision_models['clip_model'],
-                                vision_models['clip_processor'],
-                                device=vision_models['device'],
-                                method=ordering_method,
-                                output_dir=output_dir if generate_viz else None,
-                                progress_callback=update_progress
-                            )
-                            
-                            progress_bar.progress(80)
-                            status_text.text("✅ Analyse terminée !")
-                            log_container.success("🎉 Classification IA terminée avec succès !")
-                            
-                            # Afficher les résultats
+                        
+                        if vision_models is None:
+                            st.error("❌ Impossible de charger le modèle CLIP")
+                            st.stop()
+                        
+                        log_container.success(f"✅ Modèle CLIP chargé ({vision_models['device']})")
+                        progress_bar.progress(30)
+                        
+                        # Classifier avec l'IA
+                        status_text.text("🔍 Analyse Vision AI en cours...")
+                        st.info("📊 Extraction des features visuelles avec CLIP...")
+                        output_dir = temp_dir + "_classified"
+                        Path(output_dir).mkdir(exist_ok=True)
+                        
+                        # Progress callback pour le classifier
+                        def update_progress(current, total, message):
+                            pct = 30 + int((current / total) * 50)
+                            progress_bar.progress(pct)
+                            status_text.text(f"🔍 {message} ({current}/{total})")
+                        
+                        ordered_paths, report, viz_path = classify_photos_with_ai(
+                            photo_paths,
+                            vision_models['clip_model'],
+                            vision_models['clip_processor'],
+                            device=vision_models['device'],
+                            method=ordering_method,
+                            output_dir=output_dir if generate_viz else None,
+                            progress_callback=update_progress
+                        )
+                        
+                        progress_bar.progress(80)
+                        status_text.text("✅ Analyse terminée !")
+                        log_container.success("🎉 Classification IA terminée avec succès !")
+                        
+                        # Afficher les résultats
+                        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                        st.markdown("### 🎯 Résultats de la Classification IA")
+                        st.text_area("📋 Rapport détaillé", value=report, height=400, disabled=True)
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Afficher la visualisation
+                        if viz_path and Path(viz_path).exists():
                             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                            st.markdown("### 🎯 Résultats de la Classification IA")
-                            st.text_area("📋 Rapport détaillé", value=report, height=400, disabled=True)
+                            st.markdown("### 📊 Visualisation de l'ordre")
+                            st.image(viz_path, caption="Ordre optimisé des photos (gauche → droite, haut → bas)", use_container_width=True)
                             st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Copier les photos dans l'ordre
+                        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                        st.markdown("### 📥 Photos classées et renommées")
+                        
+                        ordered_dir = Path(output_dir) / "ordered_photos"
+                        ordered_dir.mkdir(exist_ok=True)
+                        
+                        for idx, src_path in enumerate(ordered_paths, 1):
+                            src = Path(src_path)
+                            # Renommer avec numéro d'ordre + nom original
+                            dest = ordered_dir / f"{idx:04d}_{src.name}"
+                            shutil.copy2(src, dest)
+                        
+                        st.success(f"✅ {len(ordered_paths)} photos ordonnées et sauvegardées")
+                        
+                        # Créer ZIP pour téléchargement
+                        import zipfile
+                        zip_path = Path(temp_dir) / "photos_classified_ai.zip"
+                        
+                        with zipfile.ZipFile(zip_path, 'w') as zipf:
+                            # Ajouter les photos ordonnées
+                            for photo_file in ordered_dir.glob("*.*"):
+                                zipf.write(photo_file, arcname=f"ordered_photos/{photo_file.name}")
                             
-                            # Afficher la visualisation
+                            # Ajouter le rapport
+                            report_path = Path(output_dir) / "classification_report.txt"
+                            if report_path.exists():
+                                zipf.write(report_path, arcname="classification_report.txt")
+                            
+                            # Ajouter la visualisation
                             if viz_path and Path(viz_path).exists():
-                                st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                                st.markdown("### 📊 Visualisation de l'ordre")
-                                st.image(viz_path, caption="Ordre optimisé des photos (gauche → droite, haut → bas)", use_container_width=True)
-                                st.markdown('</div>', unsafe_allow_html=True)
-                            
-                            # Copier les photos dans l'ordre
-                            st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                            st.markdown("### 📥 Photos classées et renommées")
-                            
-                            ordered_dir = Path(output_dir) / "ordered_photos"
-                            ordered_dir.mkdir(exist_ok=True)
-                            
-                            for idx, src_path in enumerate(ordered_paths, 1):
-                                src = Path(src_path)
-                                # Renommer avec numéro d'ordre + nom original
-                                dest = ordered_dir / f"{idx:04d}_{src.name}"
-                                shutil.copy2(src, dest)
-                            
-                            st.success(f"✅ {len(ordered_paths)} photos ordonnées et sauvegardées")
-                            
-                            # Créer ZIP pour téléchargement
-                            import zipfile
-                            zip_path = Path(temp_dir) / "photos_classified_ai.zip"
-                            
-                            with zipfile.ZipFile(zip_path, 'w') as zipf:
-                                # Ajouter les photos ordonnées
-                                for photo_file in ordered_dir.glob("*.*"):
-                                    zipf.write(photo_file, arcname=f"ordered_photos/{photo_file.name}")
-                                
-                                # Ajouter le rapport
-                                report_path = Path(output_dir) / "classification_report.txt"
-                                if report_path.exists():
-                                    zipf.write(report_path, arcname="classification_report.txt")
-                                
-                                # Ajouter la visualisation
-                                if viz_path and Path(viz_path).exists():
-                                    zipf.write(viz_path, arcname="ordering_visualization.png")
-                            
-                            # Bouton de téléchargement
-                            with open(zip_path, 'rb') as f:
-                                st.download_button(
-                                    label="📦 Télécharger les photos classées (ZIP)",
-                                    data=f.read(),
-                                    file_name="photos_classees_ia.zip",
-                                    mime="application/zip"
-                                )
-                            
-                            st.info("💡")
-                            
-                            st.markdown('</div>', unsafe_allow_html=True)
-                            
-                        except Exception as e:
-                            st.error(f"❌ Erreur lors de la classification: {str(e)}")
-                            import traceback
-                            st.text(traceback.format_exc())
+                                zipf.write(viz_path, arcname="ordering_visualization.png")
+                        
+                        # Bouton de téléchargement
+                        with open(zip_path, 'rb') as f:
+                            st.download_button(
+                                label="📦 Télécharger les photos classées (ZIP)",
+                                data=f.read(),
+                                file_name="photos_classees_ia.zip",
+                                mime="application/zip"
+                            )
+                        
+                        st.info("💡 Photos ordonnées de manière optimale pour reconstruction 3D")
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors de la classification: {str(e)}")
+                        import traceback
+                        st.text(traceback.format_exc())
             
             else:
                 # MODE OPTIMISATION RAPIDE (ancien système)
