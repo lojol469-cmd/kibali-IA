@@ -100,7 +100,12 @@ from langchain_huggingface import HuggingFaceEndpoint
 from langchain.agents import initialize_agent, Tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
-from transformers import pipeline, CLIPProcessor, CLIPModel
+from transformers import CLIPProcessor, CLIPModel, AutoTokenizer, AutoModelForCausalLM
+try:
+    from transformers import pipeline
+except ImportError:
+    # Fallback si pipeline n'est pas disponible directement
+    pipeline = None
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -120,7 +125,6 @@ from tavily import TavilyClient
 # ===============================================
 # Import du système de modèle local Qwen
 # ===============================================
-from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
@@ -1179,14 +1183,25 @@ def final_search(question, vectordb, graph, pois):
 def initialize_specialized_models():
     """Initialise les modèles spécialisés avec gestion d'erreurs"""
     models = {}
+    
+    # Vérifier si pipeline est disponible
+    if pipeline is None:
+        print("⚠️ transformers.pipeline non disponible, modèles spécialisés désactivés")
+        return {
+            'summarizer': None,
+            'translator': None,
+            'captioner': None,
+            'ner': None
+        }
+    
     try:
-        models['summarizer'] = pipeline("summarization", model="facebook/bart-large-cnn")
+        models['summarizer'] = pipeline("summarization", model=SUMMARIZER_MODEL, cache_dir=str(SUMMARIZER_CACHE))
         print("✅ Modèle de résumé chargé")
     except Exception as e:
         print(f"⚠️ Erreur chargement summarizer: {e}")
         models['summarizer'] = None
     try:
-        models['translator'] = pipeline("translation", model="Helsinki-NLP/opus-mt-fr-en")
+        models['translator'] = pipeline("translation", model=TRANSLATOR_MODEL, cache_dir=str(TRANSLATOR_CACHE))
         print("✅ Modèle de traduction chargé")
     except Exception as e:
         print(f"⚠️ Erreur chargement translator: {e}")
@@ -1198,7 +1213,7 @@ def initialize_specialized_models():
         print(f"⚠️ Erreur chargement captioner: {e}")
         models['captioner'] = None
     try:
-        models['ner'] = pipeline("ner", model="dbmdz/bert-large-cased-finetuned-conll03-english")
+        models['ner'] = pipeline("ner", model=NER_MODEL, cache_dir=str(NER_CACHE))
         print("✅ Modèle NER chargé")
     except Exception as e:
         print(f"⚠️ Erreur chargement NER: {e}")
