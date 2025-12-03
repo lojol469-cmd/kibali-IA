@@ -28,6 +28,16 @@ from MODEL_PATHS import (
     ensure_model_dirs
 )
 
+# Import du gestionnaire de mode offline
+from offline_manager import (
+    offline_manager,
+    get_model_loading_params,
+    load_model_with_fallback,
+    render_mode_indicator,
+    render_offline_status_card,
+    get_offline_capabilities
+)
+
 # Initialiser les dossiers de modèles
 ensure_model_dirs()
 
@@ -289,14 +299,20 @@ def load_local_llm_model():
     else:
         print("🖥️ Utilisation du CPU")
    
-    # Charger tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
+    # Obtenir les paramètres selon le mode (online/offline)
+    loading_params = get_model_loading_params()
+    mode = offline_manager.get_mode()
+    
+    print(f"🌐 Mode de chargement: {mode}")
+    
+    # Charger tokenizer avec fallback automatique
+    tokenizer, token_mode = load_model_with_fallback(
         QWEN_MODEL_NAME,
+        QWEN_CACHE_DIR,
+        AutoTokenizer.from_pretrained,
         trust_remote_code=True,
-        token=hf_token if hf_token else None,
         use_fast=True,
-        resume_download=True,
-        cache_dir=str(QWEN_CACHE_DIR)
+        **loading_params
     )
     
     # Corriger le problème du pad_token = eos_token pour éviter les warnings
@@ -305,27 +321,30 @@ def load_local_llm_model():
    
     # Configuration optimisée selon le device
     if device == 'cuda':
-        model = AutoModelForCausalLM.from_pretrained(
+        model, model_mode = load_model_with_fallback(
             QWEN_MODEL_NAME,
+            QWEN_CACHE_DIR,
+            AutoModelForCausalLM.from_pretrained,
             device_map="auto",
             torch_dtype=torch.float16,
             trust_remote_code=True,
-            token=hf_token if hf_token else None,
             low_cpu_mem_usage=True,
-            resume_download=True,
-            cache_dir=str(QWEN_CACHE_DIR)
+            **loading_params
         )
     else:
-        model = AutoModelForCausalLM.from_pretrained(
+        model, model_mode = load_model_with_fallback(
             QWEN_MODEL_NAME,
+            QWEN_CACHE_DIR,
+            AutoModelForCausalLM.from_pretrained,
             torch_dtype=torch.float32,
             trust_remote_code=True,
-            token=hf_token if hf_token else None,
             low_cpu_mem_usage=True,
-            resume_download=True,
-            cache_dir=str(QWEN_CACHE_DIR)
-        ).to(device)
+            **loading_params
+        )
+        model = model.to(device)
    
+    print(f"✅ Qwen chargé (mode: {model_mode})")
+    
     return tokenizer, model, device, gpu_info
 # ===============================================
 # Configuration - CHEMINS UNIFIÉS
@@ -654,28 +673,40 @@ def create_client():
 # ===============================================
 @st.cache_resource
 def load_vision_models():
-    """Charge les modèles CLIP depuis le cache local"""
+    """Charge les modèles CLIP depuis le cache local avec support offline"""
     try:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
+        # Obtenir les paramètres selon le mode (online/offline)
+        loading_params = get_model_loading_params()
+        
         # Charger CLIP pour analyse sémantique
-        print("📦 Chargement du modèle CLIP local...")
+        print("📦 Chargement du modèle CLIP...")
         print(f"📁 Cache: {CLIP_CACHE_DIR}")
-        clip_model = CLIPModel.from_pretrained(
+        print(f"🌐 Mode: {offline_manager.get_mode()}")
+        
+        clip_model, mode = load_model_with_fallback(
             CLIP_MODEL_NAME,
-            cache_dir=str(CLIP_CACHE_DIR)
-        ).to(device)
-        clip_processor = CLIPProcessor.from_pretrained(
+            CLIP_CACHE_DIR,
+            CLIPModel.from_pretrained,
+            **loading_params
+        )
+        clip_model = clip_model.to(device)
+        
+        clip_processor, _ = load_model_with_fallback(
             CLIP_MODEL_NAME,
-            cache_dir=str(CLIP_CACHE_DIR)
+            CLIP_CACHE_DIR,
+            CLIPProcessor.from_pretrained,
+            **loading_params
         )
         
-        print(f"✅ Modèle CLIP chargé sur {device}")
+        print(f"✅ Modèle CLIP chargé sur {device} (mode: {mode})")
         
         return {
             'clip_model': clip_model,
             'clip_processor': clip_processor,
-            'device': device
+            'device': device,
+            'mode': mode
         }
     except Exception as e:
         print(f"⚠️ Erreur chargement modèles vision: {e}")
@@ -2271,6 +2302,67 @@ def main():
         padding: 12px 16px !important;
         font-size: 1rem !important;
         transition: all 0.3s ease !important;
+        position: relative !important;
+        z-index: 1 !important;
+    }
+    
+    /* Labels styling - Éviter le chevauchement */
+    .stTextInput label,
+    .stTextArea label,
+    .stSelectbox label,
+    .stNumberInput label,
+    .stFileUploader label,
+    [data-testid="stWidgetLabel"] {
+        color: var(--kibali-text-secondary) !important;
+        font-weight: 500 !important;
+        margin-bottom: 0.5rem !important;
+        display: block !important;
+        position: static !important;
+        background: transparent !important;
+        padding: 0 !important;
+        width: 100% !important;
+        text-align: left !important;
+    }
+    
+    /* Container pour éviter superposition */
+    .stTextInput > div,
+    .stTextArea > div,
+    .stNumberInput > div,
+    .stSelectbox > div,
+    .stFileUploader > div {
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 0.25rem !important;
+    }
+    
+    /* Forcer la séparation label/input */
+    .stTextInput > div > div,
+    .stTextArea > div > div,
+    .stNumberInput > div > div {
+        display: block !important;
+        position: relative !important;
+    }
+    
+    /* S'assurer que le label est au-dessus */
+    .stTextInput > div > label,
+    .stTextArea > div > label,
+    .stNumberInput > div > label,
+    .stSelectbox > div > label {
+        order: -1 !important;
+        margin-bottom: 0.5rem !important;
+    }
+    
+    /* Placeholder styling */
+    .stTextInput input::placeholder,
+    .stTextArea textarea::placeholder {
+        color: var(--kibali-text-muted) !important;
+        opacity: 0.6 !important;
+    }
+    
+    /* Hide placeholder when input has focus or value */
+    .stTextInput input:focus::placeholder,
+    .stTextArea textarea:focus::placeholder {
+        opacity: 0.3 !important;
     }
 
     .stTextInput input:focus, .stTextArea textarea:focus, .stSelectbox select:focus {
@@ -2278,8 +2370,179 @@ def main():
         box-shadow: 0 0 0 2px rgba(0, 255, 136, 0.2) !important;
         transform: scale(1.02);
     }
+    
+    /* Chat Input - Texte blanc gras sur fond violet */
+    [data-testid="stChatInput"] {
+        position: relative !important;
+    }
+    
+    [data-testid="stChatInput"] input {
+        background: #6B46C1 !important;
+        border: 2px solid var(--kibali-border) !important;
+        border-radius: 12px !important;
+        color: #FFFFFF !important;
+        font-weight: 700 !important;
+        padding: 12px 16px !important;
+        font-size: 1.1rem !important;
+        line-height: 1.6 !important;
+        position: relative !important;
+        z-index: 1 !important;
+    }
+    
+    [data-testid="stChatInput"] input::placeholder {
+        color: rgba(255, 255, 255, 0.6) !important;
+        opacity: 1 !important;
+        font-weight: 500 !important;
+        position: absolute !important;
+        left: 16px !important;
+        pointer-events: none !important;
+    }
+    
+    [data-testid="stChatInput"] input:focus {
+        background: #7C3AED !important;
+        border-color: var(--kibali-green) !important;
+        box-shadow: 0 0 15px rgba(0, 255, 136, 0.3) !important;
+    }
+    
+    [data-testid="stChatInput"] input:focus::placeholder {
+        opacity: 0.3 !important;
+    }
+    
+    /* Cacher le placeholder quand il y a du texte */
+    [data-testid="stChatInput"] input:not(:placeholder-shown)::placeholder {
+        opacity: 0 !important;
+    }
+    
+    /* SIDEBAR - Corrections pour éviter superposition */
+    .css-1d391kg, [data-testid="stSidebar"] {
+        background: var(--kibali-light) !important;
+    }
+    
+    /* Texte dans la sidebar - Meilleur contraste */
+    [data-testid="stSidebar"] * {
+        color: var(--kibali-text) !important;
+    }
+    
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 {
+        color: var(--kibali-green) !important;
+        font-weight: 600 !important;
+    }
+    
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div {
+        color: var(--kibali-text) !important;
+        font-size: 1rem !important;
+    }
+    
+    /* Boutons dans la sidebar - Style icône */
+    [data-testid="stSidebar"] button {
+        width: 100% !important;
+        margin: 0.25rem 0 !important;
+        font-size: 2rem !important;
+        padding: 0.75rem !important;
+        background: var(--kibali-accent) !important;
+        border: 2px solid var(--kibali-border) !important;
+        transition: all 0.3s ease !important;
+    }
+    
+    [data-testid="stSidebar"] button:hover {
+        background: var(--kibali-green) !important;
+        transform: scale(1.05) !important;
+        box-shadow: 0 0 20px rgba(0, 255, 136, 0.5) !important;
+    }
+    
+    [data-testid="stSidebar"] button:disabled {
+        opacity: 0.5 !important;
+        cursor: not-allowed !important;
+    }
+    
+    /* Inputs dans la sidebar - Éviter superposition */
+    [data-testid="stSidebar"] .stTextInput,
+    [data-testid="stSidebar"] .stNumberInput,
+    [data-testid="stSidebar"] .stSelectbox {
+        margin-bottom: 1rem !important;
+    }
+    
+    [data-testid="stSidebar"] .stTextInput label,
+    [data-testid="stSidebar"] .stNumberInput label,
+    [data-testid="stSidebar"] .stSelectbox label {
+        display: block !important;
+        margin-bottom: 0.5rem !important;
+        position: static !important;
+        background: transparent !important;
+        padding: 0 !important;
+        width: 100% !important;
+    }
+    
+    [data-testid="stSidebar"] input,
+    [data-testid="stSidebar"] select {
+        width: 100% !important;
+        display: block !important;
+        margin-top: 0.5rem !important;
+    }
+    
+    /* Colonnes dans la sidebar */
+    [data-testid="stSidebar"] [data-testid="column"] {
+        padding: 0.25rem !important;
+    }
+    
+    /* CORRECTION GLOBALE - Empêcher toute superposition de texte */
+    /* Tous les widgets Streamlit */
+    div[data-testid="stVerticalBlock"] > div {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+    
+    /* S'assurer que les labels sont toujours au-dessus */
+    label {
+        position: static !important;
+        display: block !important;
+        margin-bottom: 0.25rem !important;
+        z-index: auto !important;
+    }
+    
+    /* Empêcher l'overlay de texte sur les inputs */
+    input, textarea, select {
+        position: relative !important;
+        z-index: 1 !important;
+        background-color: var(--kibali-accent) !important;
+    }
+    
+    /* Forcer la séparation pour tous les form elements */
+    .stTextInput,
+    .stTextArea,
+    .stNumberInput,
+    .stSelectbox,
+    .stMultiSelect,
+    .stDateInput,
+    .stTimeInput {
+        margin-bottom: 0.75rem !important;
+    }
+    
+    /* Empêcher le chevauchement du placeholder avec la valeur */
+    input:not(:placeholder-shown) {
+        color: var(--kibali-text) !important;
+    }
+    
+    input::placeholder {
+        color: var(--kibali-text-muted) !important;
+        opacity: 0.5 !important;
+    }
+    
+    /* Quand l'input a une valeur, le placeholder doit disparaître */
+    input[value]:not([value=""]) {
+        color: var(--kibali-text) !important;
+    }
+    
+    input[value]:not([value=""])::placeholder {
+        opacity: 0 !important;
+        visibility: hidden !important;
+    }
 
-    /* Success/Error messages - Version améliorée */
+    /* Success/Error messages - Version améliorée avec meilleur contraste */
     .stSuccess, .stError, .stWarning, .stInfo {
         border-radius: 12px !important;
         border: none !important;
@@ -2287,6 +2550,66 @@ def main():
         margin: 1rem 0 !important;
         animation: fadeIn 0.5s ease-out;
         box-shadow: var(--shadow-subtle);
+        font-weight: 700 !important;
+        font-size: 1.1rem !important;
+    }
+    
+    .stSuccess {
+        background: rgba(0, 255, 136, 0.25) !important;
+        border-left: 4px solid var(--kibali-green) !important;
+        color: #FFFFFF !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
+    }
+    
+    .stError {
+        background: rgba(255, 107, 107, 0.25) !important;
+        border-left: 4px solid #ff6b6b !important;
+        color: #FFFFFF !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
+    }
+    
+    .stWarning {
+        background: rgba(255, 215, 0, 0.25) !important;
+        border-left: 4px solid var(--kibali-yellow) !important;
+        color: #FFFFFF !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
+    }
+    
+    .stInfo {
+        background: rgba(0, 136, 255, 0.25) !important;
+        border-left: 4px solid var(--kibali-blue) !important;
+        color: #FFFFFF !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) !important;
+    }
+
+    /* Messages du chat - Texte blanc gras et lisible */
+    [data-testid="stChatMessage"] {
+        background: var(--kibali-accent) !important;
+        border-radius: 12px !important;
+        padding: 1rem !important;
+        margin: 0.5rem 0 !important;
+        border: 1px solid var(--kibali-border) !important;
+    }
+    
+    [data-testid="stChatMessage"] p,
+    [data-testid="stChatMessage"] span,
+    [data-testid="stChatMessage"] div {
+        color: #FFFFFF !important;
+        font-weight: 600 !important;
+        font-size: 1.05rem !important;
+        line-height: 1.6 !important;
+    }
+    
+    /* Messages utilisateur - Fond violet */
+    [data-testid="stChatMessage"][data-testid*="user"] {
+        background: #6B46C1 !important;
+        border-color: #7C3AED !important;
+    }
+    
+    /* Messages assistant - Fond accent avec bordure verte */
+    [data-testid="stChatMessage"][data-testid*="assistant"] {
+        background: var(--kibali-accent) !important;
+        border-color: var(--kibali-green) !important;
     }
 
     .stSuccess {
@@ -2352,6 +2675,33 @@ def main():
     ::-webkit-scrollbar-thumb:hover {
         background: var(--kibali-green);
         box-shadow: var(--shadow-glow);
+    }
+
+    /* Icônes grandes et visibles - Priorité absolue */
+    .stSuccess, .stError, .stWarning, .stInfo {
+        font-size: 2.5rem !important;
+        text-align: center !important;
+        padding: 1.5rem !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    
+    /* Rendre les icônes emoji plus grandes partout */
+    .stButton button {
+        font-size: 2rem !important;
+        line-height: 1 !important;
+    }
+    
+    /* Messages avec icônes uniquement - Pas de texte */
+    [data-testid="stMarkdownContainer"] {
+        font-size: 1.2rem !important;
+    }
+    
+    /* Expanders avec icônes */
+    .streamlit-expanderHeader {
+        font-size: 1.5rem !important;
+        font-weight: 600 !important;
     }
 
     /* Responsive design */
@@ -2432,6 +2782,37 @@ def main():
             opacity: 0.5;
         }
     }
+    
+    /* BOUTONS - Éviter superposition de texte */
+    button {
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        line-height: 1.5 !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 0.5rem !important;
+        padding: 0.5rem 1rem !important;
+        position: relative !important;
+    }
+    
+    button span {
+        display: inline-block !important;
+        position: relative !important;
+    }
+    
+    /* Désactiver tout pseudo-élément qui pourrait causer superposition */
+    button::before,
+    button::after {
+        display: none !important;
+    }
+    
+    /* Forcer un seul layer de texte dans les boutons */
+    button * {
+        line-height: inherit !important;
+    }
+    
     </style>
     """, unsafe_allow_html=True)
 
@@ -2464,6 +2845,37 @@ def main():
         </p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # ===============================================
+    # SIDEBAR - Indicateur de mode Online/Offline
+    # ===============================================
+    render_mode_indicator()
+    
+    # Afficher le statut des capacités si en mode offline
+    status = offline_manager.get_status_info()
+    if status['is_offline']:
+        with st.sidebar.expander("📊 Capacités"):
+            caps = get_offline_capabilities()
+            
+            # Afficher avec des icônes expressives uniquement
+            cap_icons = []
+            if caps.get('llm'):
+                cap_icons.append("🧠")
+            if caps.get('vision'):
+                cap_icons.append("👁️")
+            if caps.get('embeddings'):
+                cap_icons.append("🔤")
+            if caps.get('code_generation'):
+                cap_icons.append("💻")
+            if caps.get('image_generation'):
+                cap_icons.append("🎨")
+            if caps.get('translation'):
+                cap_icons.append("🌍")
+            
+            if cap_icons:
+                st.markdown(" ".join(cap_icons))
+            else:
+                st.warning("⚠️ Aucun modèle local")
 
     # Initialisation des états
     if 'vectordb' not in st.session_state:
@@ -2543,7 +2955,7 @@ def main():
                     with open(filepath, 'wb') as f:
                         f.write(pdf_file.getbuffer())
                     saved_files.append(pdf_file.name)
-                st.success(f"✅ {len(saved_files)} PDFs uploadés")
+                st.success("✅📄")
             st.markdown('</div>', unsafe_allow_html=True)
         
         with col2:
@@ -2748,24 +3160,24 @@ def main():
                             
                             # Extraction du texte avec OCR
                             if st.session_state.ocr_reader or pytesseract:
-                                st.info("📝 Extraction du texte de l'image...")
+                                st.info("📝")
                                 extracted_texts = extract_text_from_image(tmp_path, st.session_state.ocr_reader)
                                 if extracted_texts:
                                     extracted_text_info = organize_extracted_text(extracted_texts)
-                                    st.success(f"✅ {len(extracted_texts)} éléments de texte détectés!")
+                                    st.success("✅")
                                 else:
                                     extracted_text_info = "Aucun texte détecté dans l'image."
                             
                             # Analyse visuelle avec CLIP
                             if st.session_state.vision_models:
-                                st.info("🔍 Analyse avec CLIP local...")
+                                st.info("🔍")
                                 caption, details = analyze_image_with_clip(tmp_path, st.session_state.vision_models)
                                 
                                 if caption:
                                     image_caption = caption
                                     analysis_details = details
                                     vision_success = True
-                                    st.success("✅ Analyse CLIP réussie!")
+                                    st.success("✅🔍")
                                 else:
                                     st.error(f"❌ Erreur: {details}")
                             else:
@@ -3147,7 +3559,7 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                                             for i, doc in enumerate(rag_docs[:3], 1):
                                                 st.markdown(f"**Document {i}:** `{doc.metadata.get('source', 'Inconnu')}`")
                                         else:
-                                            st.info("Aucun résultat dans les PDFs")
+                                            st.info("❌")
                                 elif pdf_tool_used and not st.session_state.vectordb:
                                     st.warning("⚠️ Outil PDF détecté mais aucune base vectorielle chargée. Ajoutez des PDFs dans l'onglet Configuration.")
                                 
@@ -3481,7 +3893,7 @@ Sois TRÈS précis, TRÈS détaillé et professionnel. Rédige au moins 250 mots
                             organized_text = organize_extracted_text(extracted_texts)
                             st.text_area("Texte détecté", value=organized_text, height=200, disabled=True)
                         else:
-                            st.info("ℹ️ Aucun texte détecté dans l'image")
+                            st.info("ℹ️")
                         
                         # Analyser avec CLIP
                         with st.spinner("🎨 Analyse sémantique (CLIP)..."):
@@ -3673,7 +4085,7 @@ Analyse de l'image uploadée:
         )
         
         if uploaded_photos and len(uploaded_photos) > 0:
-            st.success(f"✅ {len(uploaded_photos)} photos chargées")
+            st.success("✅📸")
             
             if mode.startswith("🤖"):
                 # MODE CLASSIFICATION IA
@@ -3721,20 +4133,23 @@ Analyse de l'image uploadée:
                                 photo_paths.append(str(photo_path))
                             
                             # Charger le modèle Vision AI (CLIP)
-                            st.info("📦 Chargement du modèle Vision AI (CLIP)...")
-                            clip_model, clip_processor = load_vision_models()
-                            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                            st.info("📦")
+                            vision_models = load_vision_models()
+                            
+                            if vision_models is None:
+                                st.error("❌ Impossible de charger le modèle CLIP")
+                                st.stop()
                             
                             # Classifier avec l'IA
-                            st.info(f"🔍 Analyse IA de {len(photo_paths)} photos...")
+                            st.info("🔍")
                             output_dir = temp_dir + "_classified"
                             Path(output_dir).mkdir(exist_ok=True)
                             
                             ordered_paths, report, viz_path = classify_photos_with_ai(
                                 photo_paths,
-                                clip_model['clip_model'],
-                                clip_model['clip_processor'],
-                                device=clip_model['device'],
+                                vision_models['clip_model'],
+                                vision_models['clip_processor'],
+                                device=vision_models['device'],
                                 method=ordering_method,
                                 output_dir=output_dir if generate_viz else None
                             )
@@ -3794,7 +4209,7 @@ Analyse de l'image uploadée:
                                     mime="application/zip"
                                 )
                             
-                            st.info("💡 **Prêt pour Dust3R:** Utilisez les photos dans l'ordre 0001, 0002, 0003... pour une reconstruction optimale!")
+                            st.info("💡")
                             
                             st.markdown('</div>', unsafe_allow_html=True)
                             
@@ -3810,101 +4225,101 @@ Analyse de l'image uploadée:
                 st.markdown("#### ⚙️ Paramètres d'optimisation")
                 
                 col_param1, col_param2 = st.columns(2)
-            with col_param1:
-                target_count = st.number_input(
-                    "🎯 Nombre cible de photos (0 = automatique)",
-                    min_value=0,
-                    max_value=len(uploaded_photos),
-                    value=0,
-                    help="Laissez 0 pour une détection automatique du nombre optimal"
-                )
-            
-            with col_param2:
-                coverage_threshold = st.slider(
-                    "📊 Couverture minimale requise",
-                    min_value=0.8,
-                    max_value=1.0,
-                    value=0.95,
-                    step=0.05,
-                    help="Pourcentage de la scène qui doit être couvert (0.95 = 95%)"
-                )
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Bouton d'optimisation
-            if st.button("🚀 **Optimiser le dataset**", type="primary", use_container_width=True):
-                with st.spinner("🔍 Analyse des photos en cours..."):
-                    try:
-                        import tempfile
-                        import shutil
-                        from pathlib import Path
-                        
-                        # Créer un dossier temporaire pour les photos
-                        temp_dir = tempfile.mkdtemp(prefix="photogrammetry_")
-                        
-                        # Sauvegarder les photos uploadées
-                        st.info(f"💾 Sauvegarde de {len(uploaded_photos)} photos...")
-                        for idx, photo in enumerate(uploaded_photos):
-                            photo_path = Path(temp_dir) / photo.name
-                            with open(photo_path, 'wb') as f:
-                                f.write(photo.getbuffer())
-                        
-                        # Importer l'outil
-                        from outils.photogrammetry_optimizer_tool import PhotogrammetryOptimizerTool
-                        
-                        # Exécuter l'optimisation
-                        tool = PhotogrammetryOptimizerTool()
-                        context = {
-                            'input_folder': temp_dir,
-                            'target_count': target_count if target_count > 0 else None,
-                            'coverage_threshold': coverage_threshold,
-                            'similarity_threshold': 0.85
-                        }
-                        
-                        result = tool.execute("", context=context)
-                        
-                        # Afficher les résultats
-                        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                        st.markdown("### 📊 Résultats de l'optimisation")
-                        st.text(result)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        # Proposer le téléchargement des photos sélectionnées
-                        output_folder = Path(temp_dir + "_optimized")
-                        if output_folder.exists():
+                with col_param1:
+                    target_count = st.number_input(
+                        "🎯 Nombre cible de photos (0 = automatique)",
+                        min_value=0,
+                        max_value=len(uploaded_photos),
+                        value=0,
+                        help="Laissez 0 pour une détection automatique du nombre optimal"
+                    )
+                
+                with col_param2:
+                    coverage_threshold = st.slider(
+                        "📊 Couverture minimale requise",
+                        min_value=0.8,
+                        max_value=1.0,
+                        value=0.95,
+                        step=0.05,
+                        help="Pourcentage de la scène qui doit être couvert (0.95 = 95%)"
+                    )
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Bouton d'optimisation
+                if st.button("🚀 **Optimiser le dataset**", type="primary", use_container_width=True):
+                    with st.spinner("🔍 Analyse des photos en cours..."):
+                        try:
+                            import tempfile
+                            import shutil
+                            from pathlib import Path
+                            
+                            # Créer un dossier temporaire pour les photos
+                            temp_dir = tempfile.mkdtemp(prefix="photogrammetry_")
+                            
+                            # Sauvegarder les photos uploadées
+                            st.info(f"💾 Sauvegarde de {len(uploaded_photos)} photos...")
+                            for idx, photo in enumerate(uploaded_photos):
+                                photo_path = Path(temp_dir) / photo.name
+                                with open(photo_path, 'wb') as f:
+                                    f.write(photo.getbuffer())
+                            
+                            # Importer l'outil
+                            from outils.photogrammetry_optimizer_tool import PhotogrammetryOptimizerTool
+                            
+                            # Exécuter l'optimisation
+                            tool = PhotogrammetryOptimizerTool()
+                            context = {
+                                'input_folder': temp_dir,
+                                'target_count': target_count if target_count > 0 else None,
+                                'coverage_threshold': coverage_threshold,
+                                'similarity_threshold': 0.85
+                            }
+                            
+                            result = tool.execute("", context=context)
+                            
+                            # Afficher les résultats
                             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                            st.markdown("### 📥 Téléchargement des photos optimisées")
-                            
-                            # Créer un ZIP
-                            import zipfile
-                            zip_path = Path(temp_dir) / "photos_optimized.zip"
-                            
-                            with zipfile.ZipFile(zip_path, 'w') as zipf:
-                                for photo_file in output_folder.glob("*.*"):
-                                    if photo_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']:
-                                        zipf.write(photo_file, arcname=photo_file.name)
-                            
-                            # Bouton de téléchargement
-                            with open(zip_path, 'rb') as f:
-                                st.download_button(
-                                    label="📦 Télécharger les photos sélectionnées (ZIP)",
-                                    data=f.read(),
-                                    file_name="photos_photogrammetrie_optimisees.zip",
-                                    mime="application/zip"
-                                )
-                            
+                            st.markdown("### 📊 Résultats de l'optimisation")
+                            st.text(result)
                             st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        # Nettoyage (optionnel, garder pour debug)
-                        # shutil.rmtree(temp_dir, ignore_errors=True)
-                        
-                    except Exception as e:
-                        st.error(f"❌ Erreur lors de l'optimisation: {str(e)}")
-                        import traceback
-                        st.text(traceback.format_exc())
+                            
+                            # Proposer le téléchargement des photos sélectionnées
+                            output_folder = Path(temp_dir + "_optimized")
+                            if output_folder.exists():
+                                st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                                st.markdown("### 📥 Téléchargement des photos optimisées")
+                                
+                                # Créer un ZIP
+                                import zipfile
+                                zip_path = Path(temp_dir) / "photos_optimized.zip"
+                                
+                                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                                    for photo_file in output_folder.glob("*.*"):
+                                        if photo_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']:
+                                            zipf.write(photo_file, arcname=photo_file.name)
+                                
+                                # Bouton de téléchargement
+                                with open(zip_path, 'rb') as f:
+                                    st.download_button(
+                                        label="📦 Télécharger les photos sélectionnées (ZIP)",
+                                        data=f.read(),
+                                        file_name="photos_photogrammetrie_optimisees.zip",
+                                        mime="application/zip"
+                                    )
+                                
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            # Nettoyage (optionnel, garder pour debug)
+                            # shutil.rmtree(temp_dir, ignore_errors=True)
+                            
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors de l'optimisation: {str(e)}")
+                            import traceback
+                            st.text(traceback.format_exc())
         
         else:
-            st.info("👆 Uploadez vos photos pour commencer l'optimisation")
+            st.info("👆")
             
             # Exemples d'utilisation
             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
@@ -4005,7 +4420,7 @@ Analyse de l'image uploadée:
                                     
                                     if pdf_tool_detected:
                                         if st.session_state.vectordb:
-                                            st.info("🔍 Recherche dans les documents PDF...")
+                                            st.info("🔍")
                                             rag_docs = rag_search(test_query, st.session_state.vectordb, k=5)
                                             if rag_docs:
                                                 st.markdown('<div class="kibali-card">', unsafe_allow_html=True)

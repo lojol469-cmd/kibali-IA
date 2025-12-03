@@ -9,39 +9,42 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.parent.parent  # /home/belikan/kibali-IA
 MODELS_DIR = Path(__file__).parent  # /home/belikan/kibali-IA/kibali_data/models
 
+# Cache HuggingFace centralisé
+HUGGINGFACE_CACHE = MODELS_DIR / "huggingface_cache"
+
 # ============================================================
 # CONFIGURATION DES MODÈLES IA
 # ============================================================
 
-# 1. LLM Local (Qwen)
+# 1. LLM Local (Qwen) - Pointe vers le cache HuggingFace
 QWEN_MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
-QWEN_CACHE_DIR = MODELS_DIR / "qwen2.5-1.5b"
+QWEN_CACHE_DIR = HUGGINGFACE_CACHE
 
 # 2. Sentence Transformers (Embeddings pour RAG)
 SENTENCE_TRANSFORMER_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-SENTENCE_TRANSFORMER_CACHE = MODELS_DIR / "sentence-transformers"
+SENTENCE_TRANSFORMER_CACHE = HUGGINGFACE_CACHE
 
-# 3. Vision AI (CLIP)
+# 3. Vision AI (CLIP) - Pointe vers le cache HuggingFace
 CLIP_MODEL_NAME = "openai/clip-vit-base-patch32"
-CLIP_CACHE_DIR = MODELS_DIR / "clip"
+CLIP_CACHE_DIR = HUGGINGFACE_CACHE
 
-# 4. OCR (EasyOCR)
+# 4. OCR (EasyOCR) - Garde son propre dossier
 EASYOCR_MODEL_DIR = MODELS_DIR / "easyocr"
 EASYOCR_LANGUAGES = ['fr', 'en']
 
-# 5. NLP Pipeline Models
+# 5. NLP Pipeline Models - Tous dans le cache HuggingFace
 SUMMARIZER_MODEL = "facebook/bart-large-cnn"
-SUMMARIZER_CACHE = MODELS_DIR / "summarizer"
+SUMMARIZER_CACHE = HUGGINGFACE_CACHE
 
 TRANSLATOR_MODEL = "Helsinki-NLP/opus-mt-fr-en"
-TRANSLATOR_CACHE = MODELS_DIR / "translator"
+TRANSLATOR_CACHE = HUGGINGFACE_CACHE
 
 NER_MODEL = "dbmdz/bert-large-cased-finetuned-conll03-english"
-NER_CACHE = MODELS_DIR / "ner"
+NER_CACHE = HUGGINGFACE_CACHE
 
 # 6. Captioner (pour analyse d'images)
 CAPTIONER_MODEL = "Salesforce/blip-image-captioning-base"
-CAPTIONER_CACHE = MODELS_DIR / "captioner"
+CAPTIONER_CACHE = HUGGINGFACE_CACHE
 
 # ============================================================
 # FONCTIONS UTILITAIRES
