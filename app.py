@@ -3635,17 +3635,29 @@ Analyse de l'image uploadée:
             st.markdown('</div>', unsafe_allow_html=True)
 
     # ===============================================
-    # Onglet 6: Photogrammétrie - Optimisation de datasets
+    # Onglet 6: Photogrammétrie - Classification Intelligente avec IA
     # ===============================================
     with tab_photo:
         st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
         st.markdown("""
-        ### 📷 Optimisation de Datasets de Photogrammétrie
-        **Réduisez intelligemment vos photos tout en conservant la couverture complète.**
+        ### 📷 Classification Intelligente pour Photogrammétrie avec Vision AI
+        **L'IA analyse visuellement chaque photo et les ordonne intelligemment pour une reconstruction 3D optimale.**
         
-        Uploadez plusieurs photos (drone, aériennes, terrestres) et l'outil sélectionne 
-        automatiquement les images essentielles qui couvrent tous les angles.
+        🤖 **Analyse IA:**
+        - Vision sémantique (CLIP) - Compréhension du contenu
+        - Analyse de textures et détails visuels
+        - Détection d'angles de vue similaires
+        - Ordonnancement optimal pour Dust3R/MeshRoom
         """)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Deux modes: Classification IA ou Optimisation simple
+        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+        mode = st.radio(
+            "🎯 Mode de traitement:",
+            ["🤖 Classification IA (Analyse visuelle + Ordonnancement)", "⚡ Optimisation Rapide (Réduction simple)"],
+            help="Classification IA analyse visuellement chaque photo, Optimisation Rapide réduit juste le nombre"
+        )
         st.markdown('</div>', unsafe_allow_html=True)
         
         # Section d'upload multiple
@@ -3656,14 +3668,148 @@ Analyse de l'image uploadée:
             "Sélectionnez vos photos de photogrammétrie",
             type=['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'tif'],
             accept_multiple_files=True,
-            help="Uploadez toutes vos photos. Plus il y en a, plus la réduction sera significative!"
+            help="Uploadez toutes vos photos. L'IA les analysera et les classera intelligemment!",
+            key="photo_upload_classifier"
         )
         
         if uploaded_photos and len(uploaded_photos) > 0:
             st.success(f"✅ {len(uploaded_photos)} photos chargées")
             
-            # Paramètres d'optimisation
-            col_param1, col_param2 = st.columns(2)
+            if mode.startswith("🤖"):
+                # MODE CLASSIFICATION IA
+                st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                st.markdown("#### 🎨 Paramètres de classification IA")
+                
+                col_ai1, col_ai2 = st.columns(2)
+                with col_ai1:
+                    ordering_method = st.selectbox(
+                        "📐 Méthode d'ordonnancement",
+                        ["sequential", "cluster"],
+                        format_func=lambda x: "Séquentiel (photos qui se suivent)" if x == "sequential" else "Par groupes d'angles",
+                        help="Séquentiel: crée une chaîne d'images similaires. Groupes: classe par angles puis ordonne."
+                    )
+                
+                with col_ai2:
+                    generate_viz = st.checkbox(
+                        "📊 Générer visualisation",
+                        value=True,
+                        help="Crée une grille visuelle montrant l'ordre des photos"
+                    )
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Bouton de classification IA
+                if st.button("🚀 **Analyser et Classer avec l'IA**", type="primary", use_container_width=True):
+                    with st.spinner("🤖 Vision AI en cours d'analyse..."):
+                        try:
+                            import tempfile
+                            import shutil
+                            from pathlib import Path
+                            from outils.intelligent_photo_classifier import classify_photos_with_ai
+                            
+                            # Créer dossier temporaire
+                            temp_dir = tempfile.mkdtemp(prefix="ai_photo_classifier_")
+                            
+                            # Sauvegarder les photos
+                            st.info(f"💾 Sauvegarde de {len(uploaded_photos)} photos...")
+                            photo_paths = []
+                            for photo in uploaded_photos:
+                                photo_path = Path(temp_dir) / photo.name
+                                with open(photo_path, 'wb') as f:
+                                    f.write(photo.getbuffer())
+                                photo_paths.append(str(photo_path))
+                            
+                            # Charger le modèle Vision AI (CLIP)
+                            st.info("📦 Chargement du modèle Vision AI (CLIP)...")
+                            clip_model, clip_processor = load_vision_models()
+                            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                            
+                            # Classifier avec l'IA
+                            st.info(f"🔍 Analyse IA de {len(photo_paths)} photos...")
+                            output_dir = temp_dir + "_classified"
+                            Path(output_dir).mkdir(exist_ok=True)
+                            
+                            ordered_paths, report, viz_path = classify_photos_with_ai(
+                                photo_paths,
+                                clip_model['clip_model'],
+                                clip_model['clip_processor'],
+                                device=clip_model['device'],
+                                method=ordering_method,
+                                output_dir=output_dir if generate_viz else None
+                            )
+                            
+                            # Afficher les résultats
+                            st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                            st.markdown("### 🎯 Résultats de la Classification IA")
+                            st.text_area("📋 Rapport détaillé", value=report, height=400, disabled=True)
+                            st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            # Afficher la visualisation
+                            if viz_path and Path(viz_path).exists():
+                                st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                                st.markdown("### 📊 Visualisation de l'ordre")
+                                st.image(viz_path, caption="Ordre optimisé des photos (gauche → droite, haut → bas)", use_column_width=True)
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            # Copier les photos dans l'ordre
+                            st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                            st.markdown("### 📥 Photos classées et renommées")
+                            
+                            ordered_dir = Path(output_dir) / "ordered_photos"
+                            ordered_dir.mkdir(exist_ok=True)
+                            
+                            for idx, src_path in enumerate(ordered_paths, 1):
+                                src = Path(src_path)
+                                # Renommer avec numéro d'ordre + nom original
+                                dest = ordered_dir / f"{idx:04d}_{src.name}"
+                                shutil.copy2(src, dest)
+                            
+                            st.success(f"✅ {len(ordered_paths)} photos ordonnées et sauvegardées")
+                            
+                            # Créer ZIP pour téléchargement
+                            import zipfile
+                            zip_path = Path(temp_dir) / "photos_classified_ai.zip"
+                            
+                            with zipfile.ZipFile(zip_path, 'w') as zipf:
+                                # Ajouter les photos ordonnées
+                                for photo_file in ordered_dir.glob("*.*"):
+                                    zipf.write(photo_file, arcname=f"ordered_photos/{photo_file.name}")
+                                
+                                # Ajouter le rapport
+                                report_path = Path(output_dir) / "classification_report.txt"
+                                if report_path.exists():
+                                    zipf.write(report_path, arcname="classification_report.txt")
+                                
+                                # Ajouter la visualisation
+                                if viz_path and Path(viz_path).exists():
+                                    zipf.write(viz_path, arcname="ordering_visualization.png")
+                            
+                            # Bouton de téléchargement
+                            with open(zip_path, 'rb') as f:
+                                st.download_button(
+                                    label="📦 Télécharger les photos classées (ZIP)",
+                                    data=f.read(),
+                                    file_name="photos_classees_ia.zip",
+                                    mime="application/zip"
+                                )
+                            
+                            st.info("💡 **Prêt pour Dust3R:** Utilisez les photos dans l'ordre 0001, 0002, 0003... pour une reconstruction optimale!")
+                            
+                            st.markdown('</div>', unsafe_allow_html=True)
+                            
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors de la classification: {str(e)}")
+                            import traceback
+                            st.text(traceback.format_exc())
+            
+            else:
+                # MODE OPTIMISATION RAPIDE (ancien système)
+                st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                st.markdown("#### ⚙️ Paramètres d'optimisation")
+                
+                col_param1, col_param2 = st.columns(2)
             with col_param1:
                 target_count = st.number_input(
                     "🎯 Nombre cible de photos (0 = automatique)",
