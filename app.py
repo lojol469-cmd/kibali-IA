@@ -5172,28 +5172,6 @@ def main():
             help="📄 Ajouter des fichiers (tous formats acceptés - ajoutés automatiquement au RAG vectoriel)"
         )
         
-        # 🌊 Uploader ERT pour fichiers .dat
-        st.markdown("**🌊 Analyse ERT (géophysique):**")
-        dat_file = st.file_uploader(
-            "📎 Fichier .dat", label_visibility="collapsed",
-            type=["dat"],
-            key="dat_upload",
-            help="🌊 Fichier .dat pour analyse ERT (Electrical Resistivity Tomography)"
-        )
-        if dat_file:
-            # Sauvegarder temporairement le fichier
-            import tempfile
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.dat') as tmp:
-                tmp.write(dat_file.getbuffer())
-                tmp_path = tmp.name
-            
-            # Stocker dans session_state pour l'orchestration
-            st.session_state.uploaded_dat_file = {
-                'name': dat_file.name,
-                'path': tmp_path,
-                'size': dat_file.size
-            }
-        
         # Initialiser le tracking des fichiers traités
         if 'processed_files' not in st.session_state:
             st.session_state.processed_files = set()
@@ -5683,6 +5661,7 @@ def main():
                     try:
                         import tempfile
                         import base64
+                        import os
                         from io import BytesIO
                         
                         # Convertir l'image en base64 pour l'API
