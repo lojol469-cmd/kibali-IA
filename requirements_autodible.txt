@@ -1,0 +1,82 @@
+# Requirements spécifiques pour Autodible
+# Assistant audio intelligent en temps réel
+
+# ============================================================
+# AUDIO PROCESSING
+# ============================================================
+sounddevice>=0.4.6      # Capture/lecture audio cross-platform
+pyaudio>=0.2.14         # Alternative audio (si sounddevice ne marche pas)
+webrtcvad>=2.0.10       # Voice Activity Detection
+numpy>=1.24.0           # Traitement audio
+
+# ============================================================
+# SPEECH-TO-TEXT (Transcription)
+# ============================================================
+faster-whisper>=0.10.0  # Whisper optimisé (3-5x plus rapide)
+openai-whisper>=20231117  # Whisper standard (fallback)
+
+# ============================================================
+# TEXT-TO-SPEECH (Synthèse vocale)
+# ============================================================
+TTS>=0.22.0             # Coqui TTS (qualité studio)
+pyttsx3>=2.90           # TTS simple et rapide (fallback)
+gtts>=2.5.0             # Google TTS (fallback online)
+
+# ============================================================
+# LLM LOCAL (Mistral, Qwen, Phi)
+# ============================================================
+transformers>=4.36.0    # HuggingFace Transformers
+torch>=2.1.0            # PyTorch
+accelerate>=0.25.0      # Optimisations GPU
+bitsandbytes>=0.41.0    # Quantification (4-bit, 8-bit)
+sentencepiece>=0.1.99   # Tokenizer
+
+# ============================================================
+# OPTIMISATION & PERFORMANCE
+# ============================================================
+flash-attn>=2.5.0       # Attention ultra-rapide (si GPU)
+optimum>=1.16.0         # Optimisations HuggingFace
+
+# ============================================================
+# INTERFACE UTILISATEUR
+# ============================================================
+streamlit>=1.29.0       # Interface web
+pystray>=0.19.5         # System tray icon
+keyboard>=0.13.5        # Hotkeys globaux
+pynput>=1.7.6           # Alternative hotkeys
+
+# ============================================================
+# UTILITAIRES
+# ============================================================
+python-dotenv>=1.0.0    # Variables d'environnement
+rich>=13.7.0            # Affichage console coloré
+loguru>=0.7.2           # Logging avancé
+
+# ============================================================
+# CACHE & EMBEDDINGS
+# ============================================================
+sentence-transformers>=2.2.2  # Embeddings pour cache sémantique
+faiss-cpu>=1.7.4              # Recherche similarité rapide
+
+# ============================================================
+# MONITORING
+# ============================================================
+psutil>=5.9.0           # Monitoring CPU/RAM/GPU
+GPUtil>=1.4.0           # Monitoring GPU spécifique
+
+# ============================================================
+# NOTES D'INSTALLATION
+# ============================================================
+# 
+# Installation complète:
+# pip install -r requirements_autodible.txt
+#
+# Installation GPU (CUDA):
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# Installation flash-attn (optionnel, GPU only):
+# pip install flash-attn --no-build-isolation
+#
+# Vérifier installation:
+# python autodible_config.py
+#

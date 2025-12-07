@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  kibali-ia:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kibali-ia
+    image: kibali-ia:2.0-streaming
+    
+    # Configuration GPU (NVIDIA)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
+    # Variables d'environnement
+    environment:
+      - HF_TOKEN=${HF_TOKEN}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+    
+    # Volumes pour persistance des données
+    volumes:
+      # Données utilisateur
+      - ./kibali_data/pdfs:/app/kibali_data/pdfs
+      - ./kibali_data/graphs:/app/kibali_data/graphs
+      - ./kibali_data/vectordb:/app/kibali_data/vectordb
+      - ./kibali_data/web_cache.json:/app/kibali_data/web_cache.json
+      # Modèles (optionnel - monter si déjà téléchargés)
+      - ./kibali_data/models:/app/kibali_data/models
+      # Outputs
+      - ./outputs:/app/outputs
+      # Fichier .env
+      - ./.env:/app/.env:ro
+    
+    # Ports
+    ports:
+      - "8501:8501"
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Network
+    networks:
+      - kibali-network
+
+  # Service optionnel: Base de données pour cache avancé
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: kibali-redis
+  #   restart: unless-stopped
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - kibali-network
+
+networks:
+  kibali-network:
+    driver: bridge
+
+volumes:
+  # Volume pour Redis (si activé)
+  # redis-data:
+  kibali-models:
+    driver: local

@@ -1,0 +1,228 @@
+# Kibali IA - Attributions et Licences
+
+## 📋 Licences des Composants
+
+### 🤖 Modèles LLM
+
+#### Qwen 2.5 (Alibaba Cloud)
+- **Licence** : Apache License 2.0
+- **Usage commercial** : ✅ Autorisé
+- **Source** : https://github.com/QwenLM/Qwen2.5
+
+#### Mistral AI
+- **Licence** : Apache License 2.0
+- **Usage commercial** : ✅ Autorisé
+- **Source** : https://mistral.ai/
+
+#### Meta Llama 3.1/3.2
+- **Licence** : Meta Llama 3 Community License
+- **Usage commercial** : ✅ Autorisé (pour services)
+- **Source** : https://llama.meta.com/
+
+#### Microsoft Phi-3 Medium
+- **Licence** : MIT License
+- **Usage commercial** : ✅ Autorisé
+- **Source** : https://huggingface.co/microsoft/Phi-3-medium-4k-instruct
+
+#### Google Gemma 2
+- **Licence** : Gemma Terms of Use
+- **Usage commercial** : ✅ Autorisé
+- **Source** : https://ai.google.dev/gemma
+
+---
+
+### 📚 Frameworks & Bibliothèques
+
+#### Streamlit
+- **Licence** : Apache License 2.0
+- **Copyright** : © Snowflake Inc.
+- **Source** : https://streamlit.io/
+
+#### LangChain
+- **Licence** : MIT License
+- **Copyright** : © LangChain, Inc.
+- **Source** : https://www.langchain.com/
+
+#### HuggingFace Transformers
+- **Licence** : Apache License 2.0
+- **Copyright** : © HuggingFace Inc.
+- **Source** : https://huggingface.co/
+
+#### PyTorch
+- **Licence** : BSD-3-Clause License
+- **Copyright** : © Meta Platforms, Inc. and affiliates
+- **Source** : https://pytorch.org/
+
+#### FAISS
+- **Licence** : MIT License
+- **Copyright** : © Meta Platforms, Inc. and affiliates
+- **Source** : https://github.com/facebookresearch/faiss
+
+#### Sentence Transformers
+- **Licence** : Apache License 2.0
+- **Copyright** : © UKP Lab, TU Darmstadt
+- **Source** : https://www.sbert.net/
+
+---
+
+### 🖼️ Vision & Traitement d'Images
+
+#### CLIP (OpenAI)
+- **Licence** : MIT License
+- **Copyright** : © OpenAI
+- **Source** : https://github.com/openai/CLIP
+
+#### OpenCV
+- **Licence** : Apache License 2.0
+- **Copyright** : © OpenCV team
+- **Source** : https://opencv.org/
+
+#### EasyOCR
+- **Licence** : Apache License 2.0
+- **Copyright** : © JaidedAI
+- **Source** : https://github.com/JaidedAI/EasyOCR
+
+#### Pillow (PIL Fork)
+- **Licence** : PIL Software License
+- **Copyright** : © Fredrik Lundh, Jeffrey A. Clark
+- **Source** : https://python-pillow.org/
+
+#### scikit-image
+- **Licence** : BSD-3-Clause License
+- **Copyright** : © scikit-image team
+- **Source** : https://scikit-image.org/
+
+---
+
+### 🌍 Géospatial & 3D
+
+#### Open3D
+- **Licence** : MIT License
+- **Copyright** : © Intel Corporation
+- **Source** : http://www.open3d.org/
+
+#### NetworkX
+- **Licence** : BSD-3-Clause License
+- **Copyright** : © NetworkX Developers
+- **Source** : https://networkx.org/
+
+#### Shapely
+- **Licence** : BSD-3-Clause License
+- **Copyright** : © Sean Gillies and others
+- **Source** : https://shapely.readthedocs.io/
+
+#### PyOsmium
+- **Licence** : BSD-2-Clause License
+- **Copyright** : © Sarah Hoffmann
+- **Source** : https://osmcode.org/pyosmium/
+
+---
+
+### 📄 Traitement de Documents
+
+#### pdfplumber
+- **Licence** : MIT License
+- **Copyright** : © Jeremy Singer-Vine
+- **Source** : https://github.com/jsvine/pdfplumber
+
+---
+
+### 🔢 Calcul Scientifique
+
+#### NumPy
+- **Licence** : BSD-3-Clause License
+- **Copyright** : © NumPy Developers
+- **Source** : https://numpy.org/
+
+#### Pandas
+- **Licence** : BSD-3-Clause License
+- **Copyright** : © Pandas Development Team
+- **Source** : https://pandas.pydata.org/
+
+#### Matplotlib
+- **Licence** : PSF-based License
+- **Copyright** : © Matplotlib Development Team
+- **Source** : https://matplotlib.org/
+
+#### scikit-learn
+- **Licence** : BSD-3-Clause License
+- **Copyright** : © scikit-learn developers
+- **Source** : https://scikit-learn.org/
+
+---
+
+### 🎵 Audio
+
+#### librosa
+- **Licence** : ISC License
+- **Copyright** : © Brian McFee
+- **Source** : https://librosa.org/
+
+#### soundfile
+- **Licence** : BSD-3-Clause License
+- **Copyright** : © soundfile developers
+- **Source** : https://github.com/bastibe/python-soundfile
+
+---
+
+### 🌐 Web & Utilitaires
+
+#### Requests
+- **Licence** : Apache License 2.0
+- **Copyright** : © Kenneth Reitz
+- **Source** : https://requests.readthedocs.io/
+
+#### BeautifulSoup4
+- **Licence** : MIT License
+- **Copyright** : © Leonard Richardson
+- **Source** : https://www.crummy.com/software/BeautifulSoup/
+
+#### python-dotenv
+- **Licence** : BSD-3-Clause License
+- **Copyright** : © Saurabh Kumar
+- **Source** : https://github.com/theskumar/python-dotenv
+
+---
+
+## ⚖️ Résumé des Licences
+
+Toutes les bibliothèques utilisées dans Kibali IA sont sous licences permissives autorisant l'usage commercial :
+
+- **Apache License 2.0** : Usage commercial libre avec attribution
+- **MIT License** : Usage commercial très permissif
+- **BSD License** : Usage commercial libre
+- **Meta Llama License** : Usage commercial autorisé pour services
+- **Gemma Terms** : Usage commercial autorisé par Google
+
+---
+
+## 📝 Notice d'Attribution
+
+```
+Kibali IA - Assistant Intelligent Multi-Fonctions
+Copyright © 2025 Belikan
+
+Ce logiciel utilise des composants open source sous diverses licences.
+Voir le fichier complet LICENSES.txt pour les détails.
+
+Modèles IA : Qwen (Apache 2.0), Mistral (Apache 2.0), 
+Llama (Meta License), Phi-3 (MIT), Gemma (Google)
+
+Frameworks : Streamlit, LangChain, HuggingFace Transformers
+
+Merci à toutes les communautés open source qui rendent ce projet possible.
+```
+
+---
+
+## 🔗 Liens Utiles
+
+- **Documentation Streamlit** : https://docs.streamlit.io/
+- **HuggingFace Hub** : https://huggingface.co/
+- **LangChain Docs** : https://python.langchain.com/
+- **PyTorch** : https://pytorch.org/docs/
+
+---
+
+**Dernière mise à jour** : 7 décembre 2025
+**Version Kibali** : 2.0 - Streaming Edition

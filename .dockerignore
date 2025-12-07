@@ -1,13 +1,27 @@
+# .dockerignore pour Kibali IA v2.0
+# Optimise la taille du build Docker
+
+# Python cache et bytecode
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
 env/
 venv/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
+ENV/
+
+# Testing et coverage
 .tox/
 .coverage
 .coverage.*
@@ -15,18 +29,83 @@ pip-delete-this-directory.txt
 nosetests.xml
 coverage.xml
 *.cover
+.pytest_cache/
+.mypy_cache/
+
+# Logs
 *.log
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Git
 .git
 .gitignore
-README.md
+.gitattributes
+
+# Documentation (sauf README principal)
+*.md
+!README.md
+LICENSES.txt
+STREAMING_IMPLEMENTATION.md
+LICENSES_ANALYSIS.md
+
+# Environnement
 .env
 .env.local
 .env.*.local
+*.pid
+
+# IDE et éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node (si présent)
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .npm
 .yarn
 node_modules/
+
+# Modèles locaux (trop volumineux - à monter via volumes)
+kibali_data/models/Qwen*/
+kibali_data/models/*.bin
+kibali_data/models/*.safetensors
+kibali_data/models/*.gguf
+
+# Données utilisateur (à monter via volumes Docker)
+kibali_data/pdfs/*
+kibali_data/graphs/*
+kibali_data/vectordb/*
+kibali_data/web_cache.json
+
+# Outputs et médias générés
+outputs/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.mp3
+*.wav
+!assets/*.png
+!assets/*.jpg
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker
+Dockerfile.backup
+docker-compose.override.yml
+
+# Tests
+test_*.py
+*_test.py
+tests/
 .DS_Store
 Thumbs.db

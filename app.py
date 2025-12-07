@@ -2,7 +2,7 @@
 # Installation des dépendances (pour Colab/Jupyter - commenter pour Streamlit)
 # ===============================================
 # !apt-get install -y osmium-tool > /dev/null
-# !pip install -U streamlit huggingface_hub langchain sentence-transformers faiss-cpu pymupdf osmium networkx shapely matplotlib opencv-python-headless open3d ipywidgets pandas scikit-image scikit-learn torch torchvision langchain-community langchain-huggingface requests beautifulsoup4 python-dotenv diffusers accelerate transformers librosa soundfile tavily-python flash-attn --no-build-isolation --quiet
+# !pip install -U streamlit huggingface_hub langchain sentence-transformers faiss-cpu pdfplumber osmium networkx shapely matplotlib opencv-python-headless open3d ipywidgets pandas scikit-image scikit-learn torch torchvision langchain-community langchain-huggingface requests beautifulsoup4 python-dotenv diffusers accelerate transformers librosa soundfile tavily-python flash-attn --no-build-isolation --quiet
 # ===============================================
 # Configuration HuggingFace Token depuis .env
 # ===============================================
@@ -25,6 +25,7 @@ from MODEL_PATHS import (
     SUMMARIZER_MODEL, SUMMARIZER_CACHE,
     TRANSLATOR_MODEL, TRANSLATOR_CACHE,
     NER_MODEL, NER_CACHE,
+    CAPTIONER_MODEL, CAPTIONER_CACHE,
     ensure_model_dirs
 )
 
@@ -78,7 +79,7 @@ if not TAVILY_API_KEY:
 # Imports
 # ===============================================
 import math
-import fitz # pymupdf
+import pdfplumber  # MIT License - Compatible commercial
 import osmium
 import networkx as nx
 import streamlit as st
@@ -111,6 +112,15 @@ from langchain.agents import initialize_agent, Tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from transformers import CLIPProcessor, CLIPModel, AutoTokenizer, AutoModelForCausalLM
+
+# Import YOLO pour détection d'objets
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+    print("✅ YOLO disponible")
+except ImportError:
+    YOLO_AVAILABLE = False
+    print("⚠️ YOLO non disponible - pip install ultralytics")
 
 # Import de l'outil d'organisation Excel avec IA
 try:
@@ -166,6 +176,27 @@ import torch
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.language_models import BaseChatModel
 from typing import Iterator
+
+# ===============================================
+# Configuration automatique du device (CUDA/CPU)
+# ===============================================
+def get_optimal_device():
+    """
+    Détecte automatiquement le meilleur device disponible.
+    Fallback sur CPU si CUDA n'est pas disponible.
+    """
+    if torch.cuda.is_available():
+        device = 'cuda'
+        gpu_name = torch.cuda.get_device_name(0)
+        print(f"🎮 GPU détecté: {gpu_name}")
+        print(f"✅ Utilisation de CUDA {torch.version.cuda}")
+    else:
+        device = 'cpu'
+        print(f"💻 Aucun GPU détecté - Utilisation du CPU")
+    return device
+
+# Device global pour toute l'application
+DEVICE = get_optimal_device()
 # ===============================================
 # Import du système d'outils dynamiques
 # ===============================================
@@ -299,8 +330,79 @@ CONTEXTE UTILISATEUR: {user_message}
         return AIMessage(content=response)
     
     def _stream(self, messages, stop=None, run_manager=None, **kwargs) -> Iterator:
-        """Streaming is not implemented for simplicity."""
-        yield self._generate(messages, stop, run_manager, **kwargs)
+        """Stream tokens one by one for real-time display."""
+        # Extraire le contenu du message utilisateur
+        user_message = ""
+        for message in messages:
+            if isinstance(message, HumanMessage):
+                user_message = message.content
+                break
+       
+        # Préparer les messages comme dans _generate
+        enhanced_messages = []
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                enhanced_messages.append({"role": "system", "content": message.content})
+            elif isinstance(message, HumanMessage):
+                enhanced_messages.append({"role": "user", "content": message.content})
+            elif isinstance(message, AIMessage):
+                enhanced_messages.append({"role": "assistant", "content": message.content})
+       
+        # Génération avec streaming token par token
+        inputs = self.tokenizer.apply_chat_template(
+            enhanced_messages,
+            add_generation_prompt=True,
+            return_tensors="pt"
+        ).to(self.model.device)
+       
+        attention_mask = (inputs != self.tokenizer.pad_token_id).long()
+        
+        from transformers import TextIteratorStreamer
+        from threading import Thread
+        
+        # Créer un streamer pour générer token par token
+        streamer = TextIteratorStreamer(
+            self.tokenizer, 
+            skip_prompt=True, 
+            skip_special_tokens=True
+        )
+        
+        # Préparer les arguments de génération
+        generation_kwargs = dict(
+            inputs=inputs,
+            attention_mask=attention_mask,
+            max_new_tokens=3000,
+            temperature=0.6,
+            do_sample=True,
+            top_p=0.9,
+            repetition_penalty=1.05,
+            pad_token_id=self.tokenizer.eos_token_id,
+            streamer=streamer
+        )
+        
+        # Lancer la génération dans un thread séparé
+        thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
+        thread.start()
+        
+        # Yield chaque token au fur et à mesure
+        full_response = ""
+        for new_text in streamer:
+            full_response += new_text
+            # Vérifier les stop tokens
+            should_stop = False
+            if stop:
+                for stop_token in stop:
+                    if stop_token in full_response:
+                        full_response = full_response.split(stop_token)[0]
+                        should_stop = True
+                        break
+            
+            yield AIMessage(content=new_text)
+            
+            if should_stop:
+                break
+        
+        thread.join()
 # ===============================================
 # Chargement du modèle LLM local Qwen2.5-1.5B
 # ===============================================
@@ -311,17 +413,16 @@ def load_local_llm_model():
     print(f"🚀 Chargement de {QWEN_MODEL_NAME} en mode LOCAL...")
     print(f"📁 Cache: {QWEN_CACHE_DIR}")
     
-    # Détection GPU optimisée
-    device = 'cpu'
+    # Utiliser le device global avec fallback automatique
+    device = DEVICE
     gpu_info = ""
-    if torch.cuda.is_available():
-        device = 'cuda'
+    if device == 'cuda':
         gpu_name = torch.cuda.get_device_name(0)
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
         gpu_info = f"GPU: {gpu_name} ({gpu_memory:.1f}GB VRAM)"
-        print(f"🚀 GPU détecté: {gpu_info}")
+        print(f"✅ Modèle chargé sur GPU: {gpu_info}")
     else:
-        print("🖥️ Utilisation du CPU")
+        print("✅ Modèle chargé sur CPU (fallback automatique)")
    
     print(f"🌐 Mode: LOCAL UNIQUEMENT (pas de téléchargement)")
     
@@ -429,13 +530,14 @@ def setup_drive():
     print(f"📁 Dossier principal : {CHATBOT_DIR}")
     return True
 def extract_text_from_pdf(pdf_path):
-    """Extraire le texte d'un PDF"""
+    """Extraire le texte d'un PDF avec pdfplumber (MIT License)"""
     text = ""
     try:
-        with fitz.open(pdf_path) as doc:
-            for page_num, page in enumerate(doc):
-                page_text = page.get_text()
-                text += f"\n[Page {page_num + 1}]\n{page_text}\n"
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    text += f"\n[Page {page_num + 1}]\n{page_text}\n"
         return text
     except Exception as e:
         print(f"❌ Erreur PDF {pdf_path}: {e}")
@@ -703,20 +805,26 @@ def load_vision_models():
         # FORCER le désactivation de low_cpu_mem_usage globalement
         os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
         
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # CORRECTION: Forcer CPU pour éviter les incompatibilités CUDA
+        # Les modèles pré-compilés peuvent ne pas correspondre à la version CUDA installée
+        device = "cpu"
+        print("⚠️ Chargement des modèles vision sur CPU pour éviter les erreurs CUDA")
         
-        # Solution: Charger d'abord avec device_map="cpu" pour éviter meta tensors
-        # puis transférer manuellement
+        # Charger le modèle directement sur CPU avec torch_dtype explicite
         clip_model = CLIPModel.from_pretrained(
             "openai/clip-vit-base-patch32",
-            device_map="cpu"  # Forcer le chargement sur CPU d'abord
+            torch_dtype=torch.float32,
+            low_cpu_mem_usage=False,
+            device_map=None  # Pas de device_map automatique
         )
         
         clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
         
-        # Maintenant transférer sur le device cible
-        clip_model = clip_model.to(device)
+        # Forcer sur CPU
+        clip_model = clip_model.cpu()
         clip_model.eval()
+        
+        print("✅ Modèles CLIP chargés avec succès sur CPU")
         
         return {
             'clip_model': clip_model,
@@ -742,19 +850,103 @@ def load_ocr_reader():
                 print(f"❌ Cache OCR introuvable: {EASYOCR_MODEL_DIR}")
                 return None
             
+            # CORRECTION: Forcer CPU pour OCR également pour éviter erreurs CUDA
             reader = easyocr.Reader(
                 EASYOCR_LANGUAGES, 
-                gpu=torch.cuda.is_available(),
+                gpu=False,  # Forcer CPU
                 model_storage_directory=str(EASYOCR_MODEL_DIR),
                 download_enabled=False  # Désactiver le téléchargement
             )
-            print("✅ OCR chargé en mode LOCAL")
+            print("✅ OCR chargé en mode LOCAL sur CPU")
             return reader
         else:
             print("⚠️ EasyOCR non installé")
             return None
     except Exception as e:
         print(f"⚠️ Erreur chargement OCR: {e}")
+        return None
+
+@st.cache_resource
+def load_yolo_model():
+    """Charge le modèle YOLO pour la détection d'objets (FORCE CPU)"""
+    try:
+        if not YOLO_AVAILABLE:
+            print("⚠️ YOLO non disponible")
+            return None
+        
+        # Chercher les modèles YOLO disponibles
+        yolo_paths = [
+            Path("/home/belikan/yolo11n.pt"),
+            Path("/home/belikan/yolov8n.pt"),
+            Path("./yolo11n.pt"),
+            Path("./yolov8n.pt")
+        ]
+        
+        for yolo_path in yolo_paths:
+            if yolo_path.exists():
+                print(f"📦 Chargement YOLO: {yolo_path} (CPU forcé)")
+                
+                # CORRECTION CRITIQUE: Forcer CPU pour YOLO
+                import torch
+                model = YOLO(str(yolo_path))
+                
+                # Forcer le modèle sur CPU
+                model.to('cpu')
+                
+                # Désactiver CUDA pour les prédictions
+                import os
+                os.environ['CUDA_VISIBLE_DEVICES'] = ''
+                
+                print(f"✅ YOLO chargé avec succès sur CPU: {yolo_path.name}")
+                return model
+        
+        print("⚠️ Aucun modèle YOLO trouvé (.pt)")
+        return None
+        
+    except Exception as e:
+        print(f"⚠️ Erreur chargement YOLO: {e}")
+        return None
+
+@st.cache_resource
+def load_blip_model():
+    """Charge le modèle BLIP pour la description d'images en LOCAL"""
+    try:
+        from transformers import BlipProcessor, BlipForConditionalGeneration
+        import torch
+        
+        print("📦 Chargement BLIP en mode LOCAL...")
+        print(f"📁 Cache: {CAPTIONER_CACHE}")
+        
+        # Charger le modèle en LOCAL uniquement (CPU pour éviter erreurs CUDA)
+        processor = BlipProcessor.from_pretrained(
+            CAPTIONER_MODEL,
+            cache_dir=str(CAPTIONER_CACHE),
+            local_files_only=True
+        )
+        
+        model = BlipForConditionalGeneration.from_pretrained(
+            CAPTIONER_MODEL,
+            cache_dir=str(CAPTIONER_CACHE),
+            torch_dtype=torch.float32,
+            local_files_only=True
+        )
+        
+        # Forcer CPU pour éviter erreurs CUDA
+        model = model.cpu()
+        model.eval()
+        
+        print("✅ BLIP chargé avec succès en mode LOCAL sur CPU")
+        
+        return {
+            'processor': processor,
+            'model': model,
+            'device': 'cpu'
+        }
+        
+    except Exception as e:
+        print(f"⚠️ Erreur chargement BLIP: {e}")
+        import traceback
+        print(traceback.format_exc())
         return None
 
 def extract_text_from_image(image_path, ocr_reader=None):
@@ -863,6 +1055,10 @@ def analyze_image_with_clip(image_path, vision_models):
         clip_processor = vision_models['clip_processor']
         device = vision_models['device']
         
+        # S'assurer que le modèle est sur le bon device et en mode eval
+        clip_model = clip_model.to(device)
+        clip_model.eval()
+        
         # Charger l'image
         image = Image.open(image_path).convert('RGB')
         
@@ -885,19 +1081,34 @@ def analyze_image_with_clip(image_path, vision_models):
             "natural scenery"
         ]
         
-        # Préparer inputs
+        # Préparer inputs - traiter en CPU si nécessaire
         inputs = clip_processor(
             text=labels,
             images=image,
             return_tensors="pt",
             padding=True
-        ).to(device)
+        )
         
-        # Prédiction
+        # Déplacer explicitement chaque tensor sur le device
+        inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+        
+        # Prédiction avec gestion d'erreur CUDA
         with torch.no_grad():
-            outputs = clip_model(**inputs)
-            logits_per_image = outputs.logits_per_image
-            probs = logits_per_image.softmax(dim=1)
+            try:
+                outputs = clip_model(**inputs)
+                logits_per_image = outputs.logits_per_image
+                probs = logits_per_image.softmax(dim=1)
+            except RuntimeError as cuda_error:
+                if "CUDA" in str(cuda_error):
+                    print(f"⚠️ Erreur CUDA détectée, passage en CPU: {cuda_error}")
+                    # Fallback sur CPU
+                    clip_model = clip_model.cpu()
+                    inputs = {k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+                    outputs = clip_model(**inputs)
+                    logits_per_image = outputs.logits_per_image
+                    probs = logits_per_image.softmax(dim=1)
+                else:
+                    raise
         
         # Top 3 prédictions
         top3_probs, top3_indices = torch.topk(probs[0], 3)
@@ -918,7 +1129,10 @@ def analyze_image_with_clip(image_path, vision_models):
         return caption, results
         
     except Exception as e:
-        return None, str(e)
+        import traceback
+        error_msg = f"Erreur analyse CLIP: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        return None, error_msg
 
 def rag_search(question, vectordb, k=3):
     """Rechercher dans la base vectorielle"""
@@ -1413,6 +1627,93 @@ Réponds de manière professionnelle, structurée et approfondie."""
     
     except Exception as e:
         return f"❌ Erreur génération: {str(e)}"
+
+def generate_answer_enhanced_stream(question, context_docs, model_name, include_sources=True):
+    """
+    Version STREAMING de generate_answer_enhanced pour affichage progressif
+    Args:
+        question: Question posée
+        context_docs: Documents de contexte
+        model_name: Modèle à utiliser
+        include_sources: Inclure les sources dans la réponse
+    Yields:
+        Chunks de texte au fur et à mesure de la génération
+    """
+    if not context_docs:
+        context = "Aucun contexte spécifique trouvé."
+    else:
+        context_parts = []
+        local_sources = []
+        web_sources = []
+        
+        max_docs = 3
+        chars_per_doc = 1200
+        
+        for i, doc in enumerate(context_docs[:max_docs]):
+            source = doc.metadata.get('source', 'Document inconnu')
+            doc_type = doc.metadata.get('type', 'unknown')
+            search_source = doc.metadata.get('search_source', 'unknown')
+            content = doc.page_content.strip()[:chars_per_doc]
+            
+            if search_source == 'local_rag':
+                local_sources.append(f"[{i+1}] {source} ({doc_type})")
+            else:
+                web_sources.append(f"[{i+1}] {source}")
+            
+            context_parts.append(f"[{i+1}] {content}")
+        
+        context = "\n".join(context_parts)[:2500]
+    
+    prompt = f"""CONTEXTE:
+{context}
+
+QUESTION: {question[:500]}
+
+INSTRUCTIONS DE RÉPONSE:
+- Fournis une réponse DÉTAILLÉE et COMPLÈTE (minimum 300 mots)
+- Structure ta réponse avec des SOUS-TITRES en markdown (##)
+- Organise en PARAGRAPHES cohérents et bien espacés
+- Utilise des listes à puces (•) pour les énumérations
+- Inclus des EXEMPLES concrets quand pertinent
+- Ajoute une section CONCLUSION ou RÉSUMÉ
+- Utilise des emojis pour rendre la lecture agréable
+- Formate avec **gras** et *italique* pour l'emphase
+
+Réponds de manière professionnelle, structurée et approfondie."""
+    
+    try:
+        client = create_client()
+        messages = [{"role": "user", "content": prompt[:4000]}]
+        
+        # 🌊 STREAMING activé
+        stream = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            max_tokens=1200,
+            temperature=0.4,
+            stream=True  # 🔥 Mode streaming
+        )
+        
+        # Yield chaque chunk
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
+        
+        # Ajouter les sources à la fin
+        if include_sources and context_docs:
+            sources_text = "\n\n📚 **Sources consultées:**\n"
+            if local_sources:
+                sources_text += "**Documents locaux:**\n"
+                for source in local_sources[:3]:
+                    sources_text += f"• {source}\n"
+            if web_sources:
+                sources_text += "**Sources web:**\n"
+                for source in web_sources[:3]:
+                    sources_text += f"• {source}\n"
+            yield sources_text
+    
+    except Exception as e:
+        yield f"❌ Erreur génération: {str(e)}"
 # ===============================================
 # Fonctions Web Search et Hybrid (Mises à jour)
 # ===============================================
@@ -1515,6 +1816,346 @@ def translate_text(text, src_lang="fr", tgt_lang="en"):
         return SPECIALIZED_MODELS['translator'](text)[0]['translation_text']
     except Exception as e:
         return f"❌ Erreur traduction: {e}"
+def generate_detailed_description_with_clip(image_path, vision_models):
+    """
+    Génère une description détaillée en utilisant CLIP avec des prompts textuels précis
+    """
+    try:
+        if not vision_models:
+            return None, "Modèles CLIP non chargés"
+        
+        clip_model = vision_models['clip_model']
+        clip_processor = vision_models['clip_processor']
+        device = vision_models['device']
+        
+        # S'assurer que le modèle est sur le bon device
+        clip_model = clip_model.to(device)
+        clip_model.eval()
+        
+        # Charger l'image
+        from PIL import Image
+        image = Image.open(image_path).convert('RGB')
+        
+        # 🎯 50 PROMPTS ULTRA-DÉTAILLÉS pour analyse exhaustive
+        detailed_prompts = [
+            # === PERSONNES ET PERSONNAGES (15 prompts) ===
+            "a photograph of a person posing",
+            "a person wearing a costume or uniform",
+            "a superhero character in action",
+            "a toy action figure or collectible",
+            "a person in colorful clothing",
+            "a portrait photograph of someone",
+            "people in a group photo",
+            "a celebrity or famous person",
+            "an athlete in sports gear",
+            "a child or baby photo",
+            "a person wearing glasses or accessories",
+            "someone doing an activity or sport",
+            "a fashion model or styling photo",
+            "a person with distinctive hairstyle",
+            "an animated or cartoon character",
+            
+            # === LOGOS, TEXTE ET TYPOGRAPHIE (12 prompts) ===
+            "a logo with a single letter",
+            "a text symbol or typography design",
+            "a colored letter with gradient",
+            "a graphic design with multiple letters",
+            "a minimalist logo design",
+            "a stylized letter or monogram",
+            "a brand logo or company emblem",
+            "a document page with text",
+            "handwritten text or signature",
+            "a sign with text and symbols",
+            "typography art or calligraphy",
+            "a poster with bold text",
+            
+            # === OBJETS ET PRODUITS (10 prompts) ===
+            "a vehicle like car or motorcycle",
+            "electronic device or gadget",
+            "food dish or meal plating",
+            "clothing item or fashion accessory",
+            "furniture or home decor",
+            "a book cover or magazine",
+            "a tool or equipment",
+            "jewelry or precious items",
+            "a bottle or container product",
+            "sports equipment or gear",
+            
+            # === NATURE ET PAYSAGES (8 prompts) ===
+            "a photograph of landscape scenery",
+            "a natural outdoor scene with trees",
+            "a mountain or hill terrain",
+            "a beach or ocean view",
+            "flowers or plants in nature",
+            "a sunset or sunrise sky",
+            "animals or wildlife photo",
+            "urban cityscape or skyline",
+            
+            # === ART ET DESIGN (5 prompts) ===
+            "an illustration or digital art",
+            "a painting or artwork",
+            "a comic book or manga panel",
+            "abstract art or pattern",
+            "architectural design or blueprint",
+            
+            # === DIVERS (5 prompts) ===
+            "a technical diagram or chart",
+            "an icon or simple symbol",
+            "a screenshot of interface",
+            "a meme or internet image",
+            "a QR code or barcode"
+        ]
+        
+        # Analyser avec CLIP
+        inputs = clip_processor(
+            text=detailed_prompts,
+            images=image,
+            return_tensors="pt",
+            padding=True
+        )
+        inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+        
+        with torch.no_grad():
+            try:
+                outputs = clip_model(**inputs)
+                logits_per_image = outputs.logits_per_image
+                probs = logits_per_image.softmax(dim=1)
+            except RuntimeError as cuda_error:
+                if "CUDA" in str(cuda_error):
+                    clip_model = clip_model.cpu()
+                    inputs = {k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+                    outputs = clip_model(**inputs)
+                    logits_per_image = outputs.logits_per_image
+                    probs = logits_per_image.softmax(dim=1)
+                else:
+                    raise
+        
+        # Obtenir le top match
+        top_prob, top_idx = torch.topk(probs[0], 1)
+        main_description = detailed_prompts[top_idx.item()]
+        confidence = top_prob.item()
+        
+        # Vérifier si c'est vraiment du texte/logo AVANT de chercher une lettre
+        is_text_based = any(word in main_description.lower() for word in ["letter", "logo", "text", "symbol", "typography", "character", "document"])
+        
+        # SEULEMENT chercher une lettre si confiance élevée que c'est du texte ET score > 30%
+        letter_description = ""
+        if is_text_based and confidence > 0.30:
+            print(f"🔤 Détection de lettre activée (confiance texte: {confidence*100:.1f}%)")
+            letters = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            
+            # Méthode 1: Comparaison directe avec des lettres stylisées
+            letter_prompts = [f"the letter {letter}" for letter in letters]
+            
+            inputs_letters = clip_processor(
+                text=letter_prompts,
+                images=image,
+                return_tensors="pt",
+                padding=True
+            )
+            inputs_letters = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs_letters.items()}
+            
+            with torch.no_grad():
+                outputs_letters = clip_model(**inputs_letters)
+                logits_letters = outputs_letters.logits_per_image
+                probs_letters = logits_letters.softmax(dim=1)
+            
+            top5_letters, top5_idx = torch.topk(probs_letters[0], 5)
+            detected_letters = [letters[idx.item()] for idx in top5_idx]
+            letter_confidences = [prob.item() for prob in top5_letters]
+            
+            # Méthode 2: Vérification avec prompts alternatifs pour le top 3
+            top3_verification = []
+            for i in range(min(3, len(detected_letters))):
+                letter = detected_letters[i]
+                verify_prompts = [
+                    f"a {letter} logo",
+                    f"the capital letter {letter}",
+                    f"letter {letter} design"
+                ]
+                
+                inputs_verify = clip_processor(
+                    text=verify_prompts,
+                    images=image,
+                    return_tensors="pt",
+                    padding=True
+                )
+                inputs_verify = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs_verify.items()}
+                
+                with torch.no_grad():
+                    outputs_verify = clip_model(**inputs_verify)
+                    logits_verify = outputs_verify.logits_per_image
+                    probs_verify = logits_verify.softmax(dim=1)
+                
+                # Score moyen de vérification
+                avg_verify_score = probs_verify[0].mean().item()
+                combined_score = (letter_confidences[i] + avg_verify_score) / 2
+                top3_verification.append((letter, combined_score))
+            
+            # Trier par score combiné
+            top3_verification.sort(key=lambda x: x[1], reverse=True)
+            best_letter, best_score = top3_verification[0]
+            
+            if best_score > 0.15:  # Seuil plus bas mais avec vérification
+                letter_description = f" Il s'agit probablement de la lettre '{best_letter}' (confiance: {best_score*100:.1f}%)"
+                if len(top3_verification) > 1 and top3_verification[1][1] > 0.12:
+                    letter_description += f", ou '{top3_verification[1][0]}' ({top3_verification[1][1]*100:.1f}%)"
+            else:
+                # Afficher au moins les 3 meilleures suggestions
+                letter_description = f" Lettres possibles: {', '.join([f'{l}({s*100:.0f}%)' for l, s in top3_verification[:3]])}"
+        
+        # Analyser les couleurs (50 PROMPTS ULTRA-DÉTAILLÉS)
+        color_prompts = [
+            # Couleurs primaires et secondaires (12 prompts)
+            "with vibrant bright blue colors",
+            "with deep dark blue navy colors",
+            "with vivid red crimson colors",
+            "with dark burgundy red colors",
+            "with bright lime green colors",
+            "with dark forest green colors",
+            "with sunny bright yellow colors",
+            "with golden amber yellow colors",
+            "with rich purple violet colors",
+            "with bright orange tangerine colors",
+            "with hot pink magenta colors",
+            "with soft pastel pink colors",
+            
+            # Couleurs complexes et mélanges (15 prompts)
+            "with turquoise cyan blue-green colors",
+            "with teal aqua colors",
+            "with coral salmon pink-orange colors",
+            "with maroon dark red-brown colors",
+            "with olive green-yellow colors",
+            "with mint light green colors",
+            "with lavender light purple colors",
+            "with indigo deep blue-purple colors",
+            "with peach light orange colors",
+            "with rose pink-red colors",
+            "with khaki tan beige colors",
+            "with cream ivory off-white colors",
+            "with burgundy wine red colors",
+            "with chartreuse yellow-green colors",
+            "with crimson bright red colors",
+            
+            # Tons neutres et spéciaux (12 prompts)
+            "with pure black colors",
+            "with charcoal dark gray colors",
+            "with medium gray colors",
+            "with light silver gray colors",
+            "with pure white colors",
+            "with beige tan neutral colors",
+            "with brown chocolate colors",
+            "with dark espresso brown colors",
+            "with caramel light brown colors",
+            "with monochrome black and white",
+            "with sepia vintage brown tones",
+            "with metallic silver gold colors",
+            
+            # Atmosphères et tonalités (11 prompts)
+            "with neon bright fluorescent colors",
+            "with pastel soft light colors",
+            "with dark muted somber colors",
+            "with vibrant saturated bold colors",
+            "with rainbow multicolor spectrum",
+            "with warm red orange yellow tones",
+            "with cool blue green purple tones",
+            "with earth natural brown green tones",
+            "with translucent transparent colors",
+            "with gradients fading colors",
+            "with contrasting complementary colors"
+        ]
+        
+        inputs_colors = clip_processor(
+            text=color_prompts,
+            images=image,
+            return_tensors="pt",
+            padding=True
+        )
+        inputs_colors = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs_colors.items()}
+        
+        with torch.no_grad():
+            outputs_colors = clip_model(**inputs_colors)
+            logits_colors = outputs_colors.logits_per_image
+            probs_colors = logits_colors.softmax(dim=1)
+        
+        # AMÉLIORATION: Prendre les TOP 3 couleurs au lieu d'une seule
+        top3_colors_probs, top3_colors_idx = torch.topk(probs_colors[0], 3)
+        
+        # Construire une description de couleurs détaillée
+        detected_colors = []
+        for i in range(3):
+            color_name = color_prompts[top3_colors_idx[i].item()].replace("with ", "").replace(" colors", "").replace(" tones", "")
+            color_conf = top3_colors_probs[i].item()
+            if color_conf > 0.15:  # Seuil minimum 15%
+                detected_colors.append(f"{color_name} ({color_conf*100:.0f}%)")
+        
+        # Description finale des couleurs
+        if detected_colors:
+            color_desc = ", ".join(detected_colors[:3])  # Max 3 couleurs
+        else:
+            # Fallback si aucune couleur détectée avec confiance suffisante
+            color_desc = color_prompts[top3_colors_idx[0].item()].replace("with ", "").replace(" colors", "").replace(" tones", "")
+        
+        # Construire la description finale
+        full_description = f"{main_description} with colors: {color_desc}.{letter_description}"
+        
+        return {
+            'description': full_description,
+            'confidence': confidence,
+            'main_type': main_description,
+            'colors': color_desc,
+            'details': letter_description
+        }, None
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"Erreur description CLIP: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        return None, error_msg
+
+def caption_image_with_blip(image_path, blip_models):
+    """Génère une description détaillée de l'image avec BLIP local"""
+    try:
+        if not blip_models:
+            return None, "Modèle BLIP non chargé"
+        
+        processor = blip_models['processor']
+        model = blip_models['model']
+        device = blip_models['device']
+        
+        # Charger l'image
+        from PIL import Image
+        image = Image.open(image_path).convert('RGB')
+        
+        # Générer une description non conditionnée (description générale)
+        inputs = processor(image, return_tensors="pt").to(device)
+        
+        with torch.no_grad():
+            out = model.generate(**inputs, max_length=100, num_beams=5)
+        
+        caption = processor.decode(out[0], skip_special_tokens=True)
+        
+        # Générer aussi une description conditionnée (plus détaillée)
+        text_prompt = "a detailed description of"
+        inputs_detailed = processor(image, text=text_prompt, return_tensors="pt").to(device)
+        
+        with torch.no_grad():
+            out_detailed = model.generate(**inputs_detailed, max_length=150, num_beams=5)
+        
+        caption_detailed = processor.decode(out_detailed[0], skip_special_tokens=True)
+        
+        return {
+            'caption': caption,
+            'detailed_caption': caption_detailed,
+            'method': 'BLIP'
+        }, None
+        
+    except Exception as e:
+        import traceback
+        error_msg = f"Erreur BLIP: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        return None, error_msg
+
 def caption_image(image_path):
     client = create_client()
     model = "llava-hf/llava-1.5-7b-hf"
@@ -2068,46 +2709,122 @@ def simulate_infrared(image: np.ndarray):
     mean_intensity = np.mean(gray)
     ir_analysis = f"Simulation IR: Intensité moyenne {mean_intensity:.2f} (plus rouge = plus chaud, bleu = plus froid)"
     return ir_pil, ir_analysis
-def detect_objects(image: np.ndarray, scale_factor=0.1, vision_models=None):
-    """Détecte et analyse les objets dans l'image avec description IA contextuelle"""
+def detect_objects(image: np.ndarray, scale_factor=0.1, vision_models=None, yolo_model=None):
+    """Détecte et analyse les objets dans l'image avec YOLO + CLIP + description IA contextuelle"""
     import tempfile
     import os
     
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    img_with_contours = image.copy()
-    
+    img_with_detections = image.copy()
     objects_data = []
     
-    for idx, cnt in enumerate(contours):
-        x, y, w, h = cv2.boundingRect(cnt)
-        if w < 10 or h < 10: 
-            continue  # skip small
-        
-        # Découper l'objet pour analyse IA
-        object_roi = image[y:y+h, x:x+w]
-        
-        # Analyse contextuelle avec IA si disponible
-        if vision_models:
-            try:
-                # Sauvegarder temporairement l'objet
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
-                    object_pil = Image.fromarray(cv2.cvtColor(object_roi, cv2.COLOR_BGR2RGB))
-                    object_pil.save(tmp.name)
+    # 🎯 PRIORITÉ 1: Utiliser YOLO si disponible
+    if yolo_model and YOLO_AVAILABLE:
+        try:
+            print("🎯 Détection YOLO en cours...")
+            results = yolo_model(image, conf=0.25, verbose=False)  # Seuil de confiance 25%
+            
+            if len(results) > 0 and len(results[0].boxes) > 0:
+                boxes = results[0].boxes
+                
+                for idx, box in enumerate(boxes):
+                    # Extraire les coordonnées
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
+                    conf = float(box.conf[0].cpu().numpy())
+                    cls = int(box.cls[0].cpu().numpy())
+                    class_name = results[0].names[cls]
                     
-                    # Analyser avec CLIP
-                    caption, results = analyze_image_with_clip(tmp.name, vision_models)
+                    w = x2 - x1
+                    h = y2 - y1
                     
-                    if results and len(results) > 0:
-                        obj_type = results[0]['label']
-                        confidence = results[0]['confidence']
+                    # Calculs métriques réels
+                    w_m = w * scale_factor
+                    h_m = h * scale_factor
+                    area_m2 = w_m * h_m
+                    perimeter_m = 2 * (w_m + h_m)
+                    
+                    # Analyse de couleur dominante
+                    object_roi = image[y1:y2, x1:x2]
+                    if object_roi.size > 0:
+                        mean_color = cv2.mean(object_roi)[:3]
+                        color_desc = f"RGB({int(mean_color[2])},{int(mean_color[1])},{int(mean_color[0])})"
                     else:
-                        obj_type = 'Objet non identifié'
-                        confidence = 0.0
+                        color_desc = "N/A"
                     
-                    os.unlink(tmp.name)
-            except:
+                    # Stocker les données
+                    objects_data.append({
+                        'id': idx + 1,
+                        'type': f"{class_name} (YOLO)",
+                        'confidence': conf,
+                        'width_m': w_m,
+                        'height_m': h_m,
+                        'area_m2': area_m2,
+                        'perimeter_m': perimeter_m,
+                        'color': color_desc,
+                        'position': (x1, y1)
+                    })
+                    
+                    # Dessiner sur l'image
+                    color = (0, 255, 0) if conf > 0.5 else (255, 255, 0)
+                    cv2.rectangle(img_with_detections, (x1, y1), (x2, y2), color, 2)
+                    label = f"#{idx+1}: {class_name} {conf:.0%}"
+                    cv2.putText(img_with_detections, label, (x1, y1-10), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                    cv2.putText(img_with_detections, f"{w_m:.2f}x{h_m:.2f}m", (x1, y2+20),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+                
+                print(f"✅ YOLO: {len(objects_data)} objets détectés")
+        except Exception as e:
+            print(f"⚠️ Erreur YOLO: {e}")
+            # Fallback sur méthode traditionnelle
+    
+    # 🔄 FALLBACK: Méthode traditionnelle si YOLO échoue ou pas disponible
+    if len(objects_data) == 0:
+        print("🔄 Utilisation de la détection par contours (fallback)")
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        img_with_detections = image.copy()
+        
+        for idx, cnt in enumerate(contours):
+            x, y, w, h = cv2.boundingRect(cnt)
+            if w < 10 or h < 10: 
+                continue  # skip small
+            
+            # Découper l'objet pour analyse IA
+            object_roi = image[y:y+h, x:x+w]
+            
+            # Analyse contextuelle avec IA si disponible
+            if vision_models:
+                try:
+                    # Sauvegarder temporairement l'objet
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                        object_pil = Image.fromarray(cv2.cvtColor(object_roi, cv2.COLOR_BGR2RGB))
+                        object_pil.save(tmp.name)
+                        
+                        # Analyser avec CLIP
+                        caption, results = analyze_image_with_clip(tmp.name, vision_models)
+                        
+                        if results and len(results) > 0:
+                            obj_type = results[0]['label']
+                            confidence = results[0]['confidence']
+                        else:
+                            obj_type = 'Objet non identifié'
+                            confidence = 0.0
+                        
+                        os.unlink(tmp.name)
+                except:
+                    # Fallback sur analyse traditionnelle
+                    aspect = w / h if h != 0 else 0
+                    if aspect > 5: 
+                        obj_type = 'Structure linéaire (route/chemin)'
+                    elif aspect < 0.2: 
+                        obj_type = 'Structure verticale (clôture/poteau)'
+                    elif 0.5 < aspect < 2: 
+                        obj_type = 'Structure carrée (bâtiment/zone)'
+                    else: 
+                        obj_type = 'Structure irrégulière'
+                    confidence = 0.5
+            else:
                 # Fallback sur analyse traditionnelle
                 aspect = w / h if h != 0 else 0
                 if aspect > 5: 
@@ -2119,54 +2836,45 @@ def detect_objects(image: np.ndarray, scale_factor=0.1, vision_models=None):
                 else: 
                     obj_type = 'Structure irrégulière'
                 confidence = 0.5
-        else:
-            # Fallback sur analyse traditionnelle
-            aspect = w / h if h != 0 else 0
-            if aspect > 5: 
-                obj_type = 'Structure linéaire (route/chemin)'
-            elif aspect < 0.2: 
-                obj_type = 'Structure verticale (clôture/poteau)'
-            elif 0.5 < aspect < 2: 
-                obj_type = 'Structure carrée (bâtiment/zone)'
-            else: 
-                obj_type = 'Structure irrégulière'
-            confidence = 0.5
-        
-        # Calculs métriques réels
-        w_m = w * scale_factor
-        h_m = h * scale_factor
-        area_m2 = w_m * h_m
-        perimeter_m = 2 * (w_m + h_m)
-        
-        # Analyse de couleur dominante
-        mean_color = cv2.mean(object_roi)[:3]
-        color_desc = f"RGB({int(mean_color[2])},{int(mean_color[1])},{int(mean_color[0])})"
-        
-        # Stocker les données
-        objects_data.append({
-            'id': idx + 1,
-            'type': obj_type,
-            'confidence': confidence,
-            'width_m': w_m,
-            'height_m': h_m,
-            'area_m2': area_m2,
-            'perimeter_m': perimeter_m,
-            'color': color_desc,
-            'position': (x, y)
-        })
-        
-        # Dessiner sur l'image
-        cv2.rectangle(img_with_contours, (x, y), (x+w, y+h), (0, 255, 0), 2)
-        label = f"#{idx+1}: {obj_type[:20]}"
-        cv2.putText(img_with_contours, label, (x, y-10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-        cv2.putText(img_with_contours, f"{w_m:.2f}x{h_m:.2f}m", (x, y+h+20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+            
+            # Calculs métriques réels
+            w_m = w * scale_factor
+            h_m = h * scale_factor
+            area_m2 = w_m * h_m
+            perimeter_m = 2 * (w_m + h_m)
+            
+            # Analyse de couleur dominante
+            mean_color = cv2.mean(object_roi)[:3]
+            color_desc = f"RGB({int(mean_color[2])},{int(mean_color[1])},{int(mean_color[0])})"
+            
+            # Stocker les données
+            objects_data.append({
+                'id': idx + 1,
+                'type': obj_type,
+                'confidence': confidence,
+                'width_m': w_m,
+                'height_m': h_m,
+                'area_m2': area_m2,
+                'perimeter_m': perimeter_m,
+                'color': color_desc,
+                'position': (x, y)
+            })
+            
+            # Dessiner sur l'image
+            cv2.rectangle(img_with_detections, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            label = f"#{idx+1}: {obj_type[:20]}"
+            cv2.putText(img_with_detections, label, (x, y-10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            cv2.putText(img_with_detections, f"{w_m:.2f}x{h_m:.2f}m", (x, y+h+20),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
     
     # Créer la visualisation
     fig, ax = plt.subplots(figsize=(12, 12))
-    ax.imshow(cv2.cvtColor(img_with_contours, cv2.COLOR_BGR2RGB))
-    ax.set_title(f"Objets Détectés avec Analyse IA Contextuelle ({len(objects_data)} objets)", 
+    ax.imshow(cv2.cvtColor(img_with_detections, cv2.COLOR_BGR2RGB))
+    
+    # Déterminer le titre en fonction de la méthode utilisée
+    detection_method = "YOLO + IA" if yolo_model and len(objects_data) > 0 and "YOLO" in objects_data[0].get('type', '') else "Contours + IA"
+    ax.set_title(f"Objets Détectés ({detection_method}): {len(objects_data)} objets", 
                 fontsize=14, fontweight='bold', color='white')
     ax.axis('off')
     obj_img = fig_to_pil(fig)
@@ -2286,32 +2994,105 @@ def advanced_analyses(image: np.ndarray):
     hydro_df = pd.DataFrame({'Métrique': ['Pourcentage Eau'], 'Valeur': [water_area], 'Explication': ['Zone potentielle pour ressources hydriques']})
     adv_tables.append(df_to_html(hydro_df))
     return analyses, {}, adv_images, adv_tables
-def process_image(uploaded_file, vision_models=None):
-    """Traite l'image avec analyse IA avancée et contextuelle"""
+def process_image(uploaded_file, vision_models=None, ocr_reader=None, yolo_model=None, blip_models=None):
+    """Traite l'image avec analyse IA avancée: YOLO + CLIP + BLIP + OCR + analyses contextuelles"""
     image = Image.open(BytesIO(uploaded_file))
     img_array = np.array(image)
     proc_images = [image]
     captions = ['Image Originale']
     tables_html = []
     
-    # IR
+    # 🖼️ DESCRIPTION DÉTAILLÉE AVEC CLIP (PRIORITAIRE)
+    clip_description = ""
+    if vision_models:
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                image.save(tmp.name)
+                clip_result, error = generate_detailed_description_with_clip(tmp.name, vision_models)
+                
+                if clip_result:
+                    clip_description = f"""<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px; border-radius: 10px; margin: 10px 0;">
+                    <h4 style="color: white; margin: 0 0 10px 0;">🖼️ Description de l'image (CLIP Vision AI)</h4>
+                    <p style="color: white; font-weight: 700; font-size: 1.1rem; margin: 10px 0;">"{clip_result['description']}"</p>
+                    <p style="color: white; font-weight: 600; margin: 5px 0; font-size: 0.95rem;">
+                        <strong>Type:</strong> {clip_result['main_type']}<br>
+                        <strong>Couleurs:</strong> {clip_result['colors']}<br>
+                        <strong>Confiance:</strong> {clip_result['confidence']*100:.1f}%
+                    </p>
+                    </div>"""
+                    tables_html.append(clip_description)
+                else:
+                    tables_html.append(f'<h3 style="color: white; font-weight: bold;">🖼️ Description CLIP</h3><p style="color: orange; font-weight: 600;">Erreur: {error}</p>')
+                
+                import os
+                os.unlink(tmp.name)
+        except Exception as e:
+            print(f"⚠️ Erreur description CLIP: {e}")
+            tables_html.append(f'<h3 style="color: white; font-weight: bold;">🖼️ Description CLIP</h3><p style="color: orange; font-weight: 600;">Erreur: {str(e)}</p>')
+    
+    # 🖼️ BLIP - DESCRIPTION DÉTAILLÉE (OPTIONNEL - si disponible)
+    blip_description = ""
+    if blip_models:
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                image.save(tmp.name)
+                blip_result, error = caption_image_with_blip(tmp.name, blip_models)
+                
+                if blip_result:
+                    blip_description = f"""<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px; border-radius: 10px; margin: 10px 0;">
+                    <h4 style="color: white; margin: 0 0 10px 0;">🖼️ Description BLIP (IA Vision)</h4>
+                    <p style="color: white; font-weight: 600; margin: 5px 0;"><strong>Description générale:</strong> {blip_result['caption']}</p>
+                    <p style="color: white; font-weight: 600; margin: 5px 0;"><strong>Description détaillée:</strong> {blip_result['detailed_caption']}</p>
+                    </div>"""
+                    tables_html.append(blip_description)
+                
+                import os
+                os.unlink(tmp.name)
+        except Exception as e:
+            print(f"⚠️ BLIP non disponible: {e}")
+    
+    # 📝 OCR - EXTRACTION DE TEXTE
+    ocr_text = ""
+    if ocr_reader:
+        try:
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
+                image.save(tmp.name)
+                extracted_texts = extract_text_from_image(tmp.name, ocr_reader)
+                ocr_organized = organize_extracted_text(extracted_texts)
+                ocr_text = ocr_organized
+                
+                if extracted_texts:
+                    tables_html.append(f'<h3 style="color: white; font-weight: bold;">📝 OCR - Texte Détecté</h3><pre style="color: white; font-weight: 600;">{ocr_organized}</pre>')
+                else:
+                    tables_html.append('<h3 style="color: white; font-weight: bold;">📝 OCR - Texte Détecté</h3><p style="color: white; font-weight: 600;">Aucun texte détecté dans l\'image</p>')
+                
+                import os
+                os.unlink(tmp.name)
+        except Exception as e:
+            print(f"⚠️ Erreur OCR: {e}")
+            tables_html.append(f'<h3 style="color: white; font-weight: bold;">📝 OCR</h3><p style="color: white; font-weight: 600;">Erreur OCR: {str(e)}</p>')
+    
+    # 🌡️ IR
     ir_pil, ir_analysis = simulate_infrared(img_array)
     proc_images.append(ir_pil)
     captions.append('Simulation Infrarouge')
     tables_html.append('<h3 style="color: white; font-weight: bold;">Analyse IR</h3><p style="color: white; font-weight: 600;">' + ir_analysis + '</p>')
     
-    # Soil
+    # 🌍 Soil
     soil, hist_img, metrics_html = classify_soil(img_array)
     proc_images.append(hist_img)
     captions.append('Histogramme HSV')
     tables_html.append('<h3 style="color: white; font-weight: bold;">Métriques Sol</h3>' + metrics_html.replace('<td>', '<td style="color: white; font-weight: 600;">').replace('<th>', '<th style="color: white; font-weight: bold;">'))
     
-    # Objects avec analyse IA
-    num_objects, obj_img, dim_html, objects_data = detect_objects(img_array, vision_models=vision_models)
+    # 🎯 Objects avec YOLO + CLIP IA
+    num_objects, obj_img, dim_html, objects_data = detect_objects(img_array, vision_models=vision_models, yolo_model=yolo_model)
     proc_images.append(obj_img)
-    captions.append('Objets Détectés + IA')
+    captions.append('🎯 Objets YOLO + IA')
     if dim_html:
-        tables_html.append('<h3 style="color: white; font-weight: bold;">Objets Identifiés par IA</h3>' + dim_html.replace('<td>', '<td style="color: white; font-weight: 600;">').replace('<th>', '<th style="color: white; font-weight: bold;">'))
+        tables_html.append('<h3 style="color: white; font-weight: bold;">🎯 Objets Détectés (YOLO + CLIP)</h3>' + dim_html.replace('<td>', '<td style="color: white; font-weight: 600;">').replace('<th>', '<th style="color: white; font-weight: bold;">'))
     
     # Fences
     num_fences, fence_img, fence_html = detect_fences(img_array)
@@ -2342,30 +3123,111 @@ def process_image(uploaded_file, vision_models=None):
         "num_fences": num_fences,
         "anomalies": anomalies,
         "analyses": analyses,
-        "predictions": predictions
+        "predictions": predictions,
+        "ocr_text": ocr_text,  # Texte OCR
+        "clip_description": clip_description,  # Description CLIP détaillée
+        "blip_description": blip_description  # Description BLIP (optionnel)
     }
     
     tables_str = '<br>'.join(tables_html)
     return analysis_data, proc_images, tables_str
-def improve_analysis_with_llm(analysis_data, model_name):
-    # LIMITER LA TAILLE DES DONNÉES
-    data_str = json.dumps(analysis_data, indent=2)[:1000]  # MAX 1000 CHARS
-    prompt = f"""Analyse:
-{data_str}
+def generate_comprehensive_description(analysis_data):
+    """
+    Génère une description complète et cohérente en combinant tous les modèles d'IA
+    """
+    description_parts = []
+    
+    # 1. CLIP Description détaillée (prioritaire)
+    clip_desc = analysis_data.get('clip_description', '')
+    if clip_desc and '<p style' in clip_desc:
+        # Extraire le texte du HTML
+        import re
+        clip_match = re.search(r'<p style="color: white; font-weight: 700.*?">(.*?)</p>', clip_desc, re.DOTALL)
+        if clip_match:
+            description_parts.append("🖼️ **Description de l'image (CLIP Vision AI):**")
+            description_parts.append(f"   {clip_match.group(1).strip()}")
+    
+    # 2. BLIP (si disponible)
+    blip_desc = analysis_data.get('blip_description', '')
+    if blip_desc and '<p style' in blip_desc:
+        import re
+        blip_texts = re.findall(r'<strong>.*?:</strong>\s*(.*?)</p>', blip_desc)
+        if blip_texts:
+            description_parts.append("\n🎨 **Analyse BLIP complémentaire:**")
+            description_parts.append(f"   {blip_texts[0]}")
+    
+    # 3. OCR (texte détecté)
+    ocr_text = analysis_data.get('ocr_text', '')
+    if ocr_text and 'Aucun texte' not in ocr_text:
+        # Extraire juste les mots principaux
+        import re
+        text_matches = re.findall(r'✅.*?\]\s*(.*?)$', ocr_text, re.MULTILINE)
+        if text_matches:
+            unique_words = list(set([w.strip() for w in text_matches if len(w.strip()) > 1]))
+            if unique_words:
+                description_parts.append(f"\n📝 **Texte détecté:** {', '.join(unique_words[:10])}")
+    
+    # 4. YOLO (objets détectés)
+    objects = analysis_data.get('objects_detected', [])
+    if objects:
+        yolo_objects = [obj for obj in objects if 'YOLO' in obj.get('type', '')]
+        if yolo_objects:
+            object_types = {}
+            for obj in yolo_objects:
+                obj_type = obj['type'].replace(' (YOLO)', '')
+                object_types[obj_type] = object_types.get(obj_type, 0) + 1
+            
+            obj_summary = ', '.join([f"{count} {name}" if count > 1 else name 
+                                    for name, count in list(object_types.items())[:5]])
+            description_parts.append(f"\n🎯 **Objets identifiés (YOLO):** {obj_summary}")
+    
+    # 5. Informations techniques
+    num_objects = analysis_data.get('num_objects', 0)
+    if num_objects > 0:
+        description_parts.append(f"\n📊 **Analyse technique:** {num_objects} éléments détectés")
+    
+    # Générer le résumé final
+    if description_parts:
+        return '\n'.join(description_parts)
+    else:
+        return "Image analysée - aucune information spécifique détectée"
 
-Réponds concis."""
+def improve_analysis_with_llm(analysis_data, model_name):
+    """
+    Améliore l'analyse avec le LLM en utilisant la description complète
+    """
+    # Générer d'abord une description cohérente
+    comprehensive_desc = generate_comprehensive_description(analysis_data)
+    
+    # Extraire les informations clés pour le LLM
+    blip_desc = analysis_data.get('blip_description', '')
+    ocr_text = analysis_data.get('ocr_text', '')
+    objects = analysis_data.get('objects_detected', [])
+    
+    # Construire un prompt intelligent
+    prompt = f"""Analyse cette image en français de manière précise et concise:
+
+{comprehensive_desc}
+
+Informations techniques:
+- Résolution: {analysis_data.get('soil', 'N/A')}
+- Objets: {len(objects)} détectés
+
+Décris ce que tu vois en 2-3 phrases claires et précises."""
+
     try:
         client = create_client()
-        messages = [{"role": "user", "content": prompt[:1500]}]  # LIMITER À 1500
+        messages = [{"role": "user", "content": prompt[:2000]}]
         response = client.chat.completions.create(
             model=model_name,
             messages=messages,
-            max_tokens=400,  # RÉDUIRE DE 800 À 400
-            temperature=0.5
+            max_tokens=500,
+            temperature=0.3
         )
         return response.choices[0].message.content
     except Exception as e:
-        return f"❌ Erreur: {str(e)}"
+        # Fallback sur la description générée
+        return comprehensive_desc
 # ===============================================
 # Interface Streamlit Améliorée
 # ===============================================
@@ -4117,12 +4979,255 @@ def main():
                 help="🎥 Ajouter des vidéos"
             )
         
+        # Nouvelle colonne pour les PDFs
+        st.markdown("**📄 Ajouter des documents:**")
+        uploaded_pdfs = st.file_uploader(
+            "📎 PDF", label_visibility="collapsed",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="pdf_chat_uploader",
+            help="📄 Ajouter des PDFs (ajoutés automatiquement au RAG vectoriel)"
+        )
+        
         # Initialiser le tracking des fichiers traités
         if 'processed_files' not in st.session_state:
             st.session_state.processed_files = set()
         
+        # Initialiser le tracking des PDFs uploadés dans le chat
+        if 'chat_uploaded_pdfs' not in st.session_state:
+            st.session_state.chat_uploaded_pdfs = []
+        
         # Variable pour tracker si de nouveaux médias ont été analysés
         new_media_analyzed = False
+        
+        # ===============================================
+        # TRAITEMENT DES PDFs UPLOADÉS DANS LE CHAT
+        # ===============================================
+        if uploaded_pdfs:
+            for pdf_file in uploaded_pdfs:
+                # Vérifier si déjà traité
+                file_key = f"pdf_{pdf_file.name}_{pdf_file.size}"
+                if file_key in st.session_state.processed_files:
+                    continue  # Skip si déjà traité
+                
+                # Marquer comme en cours de traitement
+                st.session_state.processed_files.add(file_key)
+                
+                # Message utilisateur
+                st.session_state.chat_history.append({
+                    "role": "user",
+                    "content": f"📄 PDF uploadé: {pdf_file.name}"
+                })
+                
+                # Traitement du PDF
+                with st.spinner(f"📄 Traitement de {pdf_file.name}..."):
+                    try:
+                        # 1. Sauvegarder le PDF dans PDFS_PATH
+                        pdf_path = os.path.join(PDFS_PATH, pdf_file.name)
+                        with open(pdf_path, 'wb') as f:
+                            f.write(pdf_file.getbuffer())
+                        
+                        st.success(f"✅ PDF sauvegardé: {pdf_file.name}")
+                        
+                        # 2. Extraire le texte
+                        pdf_text = extract_text_from_pdf(pdf_path)
+                        pdf_pages = len(pdf_text.split('\n\n'))  # Approximation du nombre de pages
+                        word_count = len(pdf_text.split())
+                        
+                        st.info(f"📊 Extrait: ~{pdf_pages} pages, {word_count} mots")
+                        
+                        # 3. Ajouter au RAG vectoriel
+                        with st.spinner("🔄 Ajout au RAG vectoriel..."):
+                            # Charger l'embedding model
+                            embedding_model = HuggingFaceEmbeddings(
+                                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                                cache_folder=str(SENTENCE_TRANSFORMER_CACHE)
+                            )
+                            
+                            # Chunker le texte
+                            text_splitter = RecursiveCharacterTextSplitter(
+                                chunk_size=1000,
+                                chunk_overlap=100
+                            )
+                            
+                            # Créer les documents
+                            chunks = text_splitter.split_text(pdf_text)
+                            documents = [
+                                Document(
+                                    page_content=chunk,
+                                    metadata={
+                                        "source": pdf_file.name,
+                                        "chunk_id": i,
+                                        "total_chunks": len(chunks)
+                                    }
+                                )
+                                for i, chunk in enumerate(chunks)
+                            ]
+                            
+                            # Ajouter à la vectordb existante ou créer nouvelle
+                            if st.session_state.vectordb:
+                                st.session_state.vectordb.add_documents(documents)
+                                st.success(f"✅ {len(chunks)} chunks ajoutés au RAG")
+                            else:
+                                # Créer nouvelle vectordb
+                                st.session_state.vectordb = FAISS.from_documents(
+                                    documents,
+                                    embedding_model
+                                )
+                                st.success(f"✅ RAG créé avec {len(chunks)} chunks")
+                            
+                            # Sauvegarder la vectordb
+                            st.session_state.vectordb.save_local(VECTORDB_PATH)
+                            st.success("💾 Base vectorielle sauvegardée")
+                        
+                        # 4. Stocker les infos du PDF pour le panneau d'outils
+                        pdf_info = {
+                            'name': pdf_file.name,
+                            'path': pdf_path,
+                            'text': pdf_text,
+                            'pages': pdf_pages,
+                            'word_count': word_count,
+                            'chunks': len(chunks)
+                        }
+                        st.session_state.chat_uploaded_pdfs.append(pdf_info)
+                        
+                        # 5. Message de succès avec panneau d'outils
+                        tools_panel_html = f'''
+<div style="
+    background: linear-gradient(135deg, rgba(0, 255, 136, 0.1), rgba(0, 136, 255, 0.1));
+    border: 2px solid rgba(0, 255, 136, 0.3);
+    border-radius: 15px;
+    padding: 1.5rem;
+    margin: 1rem 0;
+    box-shadow: 0 4px 15px rgba(0, 255, 136, 0.2);
+">
+    <div style="display: flex; align-items: center; margin-bottom: 1rem;">
+        <span style="font-size: 2rem; margin-right: 1rem;">📄</span>
+        <div>
+            <h3 style="color: #00ff88; margin: 0; font-size: 1.3rem;">PDF Chargé avec Succès !</h3>
+            <p style="color: #b0b0b0; margin: 0.3rem 0 0 0; font-size: 0.9rem;">{pdf_file.name}</p>
+        </div>
+    </div>
+    
+    <div style="
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        padding: 1rem;
+        background: rgba(74, 74, 126, 0.2);
+        border-radius: 10px;
+    ">
+        <div style="color: white;">
+            <strong>📊 Pages:</strong> ~{pdf_pages}
+        </div>
+        <div style="color: white;">
+            <strong>📝 Mots:</strong> {word_count:,}
+        </div>
+        <div style="color: white;">
+            <strong>🧩 Chunks RAG:</strong> {len(chunks)}
+        </div>
+        <div style="color: white;">
+            <strong>✅ Statut:</strong> <span style="color: #00ff88;">Prêt</span>
+        </div>
+    </div>
+    
+    <h4 style="color: #00ff88; margin: 1rem 0 0.5rem 0;">🛠️ Outils Disponibles:</h4>
+    <p style="color: #e0e0e0; font-size: 0.9rem; margin-bottom: 1rem;">
+        Le PDF est maintenant dans la base vectorielle. Vous pouvez:
+    </p>
+    
+    <div style="display: grid; gap: 0.8rem;">
+        <div style="
+            background: rgba(0, 255, 136, 0.1);
+            border-left: 3px solid #00ff88;
+            padding: 0.8rem;
+            border-radius: 5px;
+        ">
+            <strong style="color: #00ff88;">💬 1. Poser des questions</strong>
+            <p style="color: white; margin: 0.3rem 0 0 0; font-size: 0.85rem;">
+                Ex: "Résume ce PDF", "Quels sont les points clés?"
+            </p>
+        </div>
+        
+        <div style="
+            background: rgba(0, 136, 255, 0.1);
+            border-left: 3px solid #0088ff;
+            padding: 0.8rem;
+            border-radius: 5px;
+        ">
+            <strong style="color: #0088ff;">📋 2. Résumé Intelligent</strong>
+            <p style="color: white; margin: 0.3rem 0 0 0; font-size: 0.85rem;">
+                Tapez: "Résume le PDF en mode [court/moyen/détaillé]"
+            </p>
+        </div>
+        
+        <div style="
+            background: rgba(255, 215, 0, 0.1);
+            border-left: 3px solid #ffd700;
+            padding: 0.8rem;
+            border-radius: 5px;
+        ">
+            <strong style="color: #ffd700;">🌐 3. Traduction Complète</strong>
+            <p style="color: white; margin: 0.3rem 0 0 0; font-size: 0.85rem;">
+                Tapez: "Traduis le PDF en [langue]"
+            </p>
+        </div>
+        
+        <div style="
+            background: rgba(138, 43, 226, 0.1);
+            border-left: 3px solid #8a2be2;
+            padding: 0.8rem;
+            border-radius: 5px;
+        ">
+            <strong style="color: #8a2be2;">💻 4. Générer Application</strong>
+            <p style="color: white; margin: 0.3rem 0 0 0; font-size: 0.85rem;">
+                Tapez: "Génère une application basée sur ce PDF"
+            </p>
+        </div>
+        
+        <div style="
+            background: rgba(255, 105, 180, 0.1);
+            border-left: 3px solid #ff69b4;
+            padding: 0.8rem;
+            border-radius: 5px;
+        ">
+            <strong style="color: #ff69b4;">📊 5. Rapport Multi-IA Détaillé</strong>
+            <p style="color: white; margin: 0.3rem 0 0 0; font-size: 0.85rem;">
+                Tapez: "Génère un rapport détaillé sur ce PDF"
+            </p>
+        </div>
+    </div>
+    
+    <div style="
+        margin-top: 1rem;
+        padding: 0.8rem;
+        background: rgba(0, 255, 136, 0.05);
+        border-radius: 8px;
+        border: 1px dashed rgba(0, 255, 136, 0.3);
+    ">
+        <p style="color: #00ff88; margin: 0; font-size: 0.85rem;">
+            💡 <strong>Astuce:</strong> L'IA a maintenant accès au contenu complet du PDF via le RAG vectoriel !
+        </p>
+    </div>
+</div>
+'''
+                        
+                        # Ajouter le panneau d'outils au chat
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": tools_panel_html,
+                            "is_html": True
+                        })
+                        
+                    except Exception as e:
+                        error_msg = f"❌ Erreur lors du traitement du PDF: {str(e)}"
+                        st.session_state.chat_history.append({
+                            "role": "assistant",
+                            "content": error_msg
+                        })
+                        import traceback
+                        st.error(traceback.format_exc())
         
         # Analyse des images avec Vision AI (s'affiche dans le chat)
         if uploaded_images:
@@ -4149,7 +5254,6 @@ def main():
                     try:
                         import tempfile
                         import base64
-                        import os
                         from io import BytesIO
                         
                         # Convertir l'image en base64 pour l'API
@@ -4158,7 +5262,8 @@ def main():
                         base64_image = base64.b64encode(image_bytes).decode('utf-8')
                         
                         # Sauvegarder temporairement pour métadonnées
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(img_file.name)[1]) as tmp_file:
+                        img_suffix = os.path.splitext(img_file.name)[1]
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=img_suffix) as tmp_file:
                             tmp_file.write(image_bytes)
                             tmp_path = tmp_file.name
                         
@@ -4186,70 +5291,176 @@ def main():
                             extracted_text_info = ""
                             
                             # Extraction du texte avec OCR
+                            extracted_text_keywords = []
                             if st.session_state.ocr_reader or pytesseract:
-                                st.info("📝")
+                                st.info("📝 Extraction OCR en cours...")
                                 extracted_texts = extract_text_from_image(tmp_path, st.session_state.ocr_reader)
                                 if extracted_texts:
                                     extracted_text_info = organize_extracted_text(extracted_texts)
-                                    st.success("✅")
+                                    # Extraire mots-clés pour recherche web
+                                    import re
+                                    text_words = re.findall(r'✅.*?\]\s*(.*?)$', extracted_text_info, re.MULTILINE)
+                                    if text_words:
+                                        extracted_text_keywords = list(set([w.strip() for w in text_words if len(w.strip()) > 2]))[:5]
+                                    st.success(f"✅ OCR: {len(extracted_texts)} éléments détectés")
                                 else:
                                     extracted_text_info = "Aucun texte détecté dans l'image."
                             
-                            # Analyse visuelle avec CLIP
+                            # Détection d'objets avec YOLO
+                            yolo_detections = []
+                            if 'yolo_model' not in st.session_state:
+                                st.session_state.yolo_model = load_yolo_model()
+                            
+                            if st.session_state.yolo_model:
+                                st.info("🎯 Détection YOLO en cours...")
+                                try:
+                                    # Forcer l'inférence sur CPU
+                                    results = st.session_state.yolo_model(tmp_path, verbose=False, device='cpu')
+                                    if results and len(results) > 0:
+                                        for result in results:
+                                            if result.boxes:
+                                                for box in result.boxes:
+                                                    class_id = int(box.cls[0])
+                                                    confidence = float(box.conf[0])
+                                                    class_name = result.names[class_id]
+                                                    if confidence > 0.3:  # Seuil 30%
+                                                        yolo_detections.append({
+                                                            'class': class_name,
+                                                            'confidence': confidence
+                                                        })
+                                        if yolo_detections:
+                                            st.success(f"✅ YOLO: {len(yolo_detections)} objets détectés")
+                                except Exception as yolo_err:
+                                    st.warning(f"⚠️ YOLO: {yolo_err}")
+                            
+                            # Analyse visuelle avec CLIP (NOUVELLE MÉTHODE DÉTAILLÉE)
                             if st.session_state.vision_models:
-                                st.info("🔍")
-                                caption, details = analyze_image_with_clip(tmp_path, st.session_state.vision_models)
+                                st.info("🔍 Analyse CLIP détaillée (50 prompts)...")
                                 
-                                if caption:
-                                    image_caption = caption
-                                    analysis_details = details
+                                # Utiliser la nouvelle fonction de description détaillée
+                                clip_result, error = generate_detailed_description_with_clip(tmp_path, st.session_state.vision_models)
+                                
+                                if clip_result:
+                                    image_caption = clip_result['description']
+                                    analysis_details = [
+                                        {'label': 'Type', 'confidence': clip_result['confidence'], 'value': clip_result['main_type']},
+                                        {'label': 'Couleurs', 'confidence': 1.0, 'value': clip_result['colors']},
+                                        {'label': 'Détails', 'confidence': 1.0, 'value': clip_result.get('details', 'N/A')}
+                                    ]
                                     vision_success = True
-                                    st.success("✅🔍")
+                                    st.success("✅ Analyse CLIP détaillée complétée")
                                 else:
-                                    st.error(f"❌ Erreur: {details}")
+                                    st.error(f"❌ Erreur: {error}")
                             else:
                                 st.error("❌ Modèles de vision non disponibles")
                             
                             if vision_success:
-                                # Enrichir avec recherche web sur le type d'image
+                                # Enrichir avec recherche web sur TEXTE OCR détecté
+                                web_context = ""
+                                web_results_text = []
                                 try:
-                                    web_results = enhanced_web_search(f"analyse détaillée de: {image_caption}", max_results=2)
-                                    web_context = "\n".join([f"{r.get('title', '')[:40]}: {r.get('body', '')[:100]}" for r in web_results[:2]]) if web_results else ""
-                                except:
+                                    if extracted_text_keywords:
+                                        # Recherche web basée sur le TEXTE détecté (plus pertinent)
+                                        search_query = " ".join(extracted_text_keywords[:3])
+                                        st.info(f"🌐 Recherche web: '{search_query}'")
+                                        web_results_text = enhanced_web_search(search_query, max_results=3, search_type="both")
+                                        if web_results_text:
+                                            web_context = "\n".join([f"📌 {r.get('title', '')[:60]}: {r.get('body', '')[:120]}" for r in web_results_text[:3]])
+                                            st.success(f"✅ Web: {len(web_results_text)} résultats")
+                                    else:
+                                        # Fallback: recherche sur le type d'image
+                                        web_results_text = enhanced_web_search(f"information sur: {image_caption}", max_results=2)
+                                        web_context = "\n".join([f"{r.get('title', '')[:40]}: {r.get('body', '')[:100]}" for r in web_results_text[:2]]) if web_results_text else ""
+                                except Exception as web_err:
+                                    st.warning(f"⚠️ Recherche web: {web_err}")
                                     web_context = ""
                                 
-                                # Générer analyse complète avec LLM textuel
-                                details_str = "\n".join([f"- {d['label']}: {d['confidence']:.1%}" for d in analysis_details]) if analysis_details else "Non disponibles"
+                                # PROMPT ULTRA-AMÉLIORÉ avec YOLO + Web
+                                yolo_summary = ""
+                                if yolo_detections:
+                                    yolo_list = ", ".join([f"{d['class']} ({d['confidence']:.0%})" for d in yolo_detections[:10]])
+                                    yolo_summary = f"\n\n🎯 **YOLO a détecté ces objets:**\n{yolo_list}"
                                 
-                                # PROMPT ULTRA-COMPACT
-                                analysis_prompt = f"""Image: {img_file.name[:30]} ({width}x{height})
+                                web_summary = ""
+                                if web_context:
+                                    web_summary = f"\n\n🌐 **Informations web trouvées:**\n{web_context[:400]}"
+                                
+                                analysis_prompt = f"""Analyse cette image en français de manière ULTRA-PRÉCISE:
 
-🤖 CLIP: {image_caption[:200]}
-📝 OCR: {extracted_text_info[:300]}
-🌐 Web: {web_context[:200] if web_context else "N/A"}
+📸 Image: {img_file.name} ({width}x{height}px, {img_format})
 
-Analyse concise (max 150 mots):"""
+🖼️ **CLIP Vision AI (50 prompts) a détecté:**
+{image_caption}
+
+📝 **OCR a extrait ce texte:**
+{extracted_text_info[:400] if extracted_text_info and "Aucun texte" not in extracted_text_info else "Aucun texte visible"}{yolo_summary}{web_summary}
+
+INSTRUCTIONS CRITIQUES:
+1. Combine TOUTES les sources (CLIP + OCR + YOLO + Web) pour une analyse complète
+2. Si OCR détecte du texte, UTILISE LES INFOS WEB pour expliquer le contexte
+3. Si YOLO détecte des objets, mentionne-les précisément
+4. Ignore les détections de lettres CLIP < 40% si OCR ne confirme pas
+5. Décris ce qui est VRAIMENT visible avec TOUS les détails (couleurs exactes, objets, texte, contexte)
+6. Si c'est un logo/texte, explique CE QUE ÇA REPRÉSENTE (utilise le web)
+
+Réponds en 3-5 phrases ULTRA-DÉTAILLÉES incluant: type d'image, couleurs précises, objets/textes détectés, et contexte web:"""
 
                                 text_client = create_client()
                                 analysis_response = text_client.chat.completions.create(
                                     model=WORKING_MODELS[model_choice],
-                                    messages=[{"role": "user", "content": analysis_prompt[:1200]}],  # LIMITER À 1200 CHARS
-                                    max_tokens=400,  # RÉDUIRE DE 1200 À 400
-                                    temperature=0.7
+                                    messages=[{"role": "user", "content": analysis_prompt[:1800]}],
+                                    max_tokens=500,
+                                    temperature=0.1  # Température très basse pour précision maximale
                                 )
                                 
                                 enriched_analysis = analysis_response.choices[0].message.content
                                 
-                                # Préparer l'affichage avec le texte extrait
-                                analysis_display = f"**🖼️ Analyse de {img_file.name}**\n\n📏 Résolution: {width}x{height}px | Format: {img_format}\n\n"
+                                # Préparer l'affichage ULTRA-COMPLET
+                                analysis_display = f"**🖼️ Analyse Ultra-Détaillée de {img_file.name}**\n\n"
+                                analysis_display += f"📏 Résolution: {width}x{height}px | Format: {img_format}\n\n"
                                 
-                                # Ajouter le texte extrait si disponible
+                                # Extraire la lettre de la description CLIP SEULEMENT si confiance > 40%
+                                import re
+                                letter_match = re.search(r"lettre '([A-Z])' \(confiance: ([\d.]+)%\)", image_caption)
+                                if letter_match:
+                                    detected_letter = letter_match.group(1)
+                                    letter_confidence = float(letter_match.group(2))
+                                    # Afficher SEULEMENT si confiance > 40%
+                                    if letter_confidence > 40.0:
+                                        analysis_display += f"## 🔤 LETTRE DÉTECTÉE: **{detected_letter}** ({letter_confidence:.1f}%)\n\n"
+                                
+                                # Description CLIP détaillée (50 prompts) avec COULEURS SÉPARÉES
+                                # Extraire les couleurs du clip_result
+                                colors_detailed = clip_result.get('colors', 'N/A')
+                                main_type_only = clip_result.get('main_type', image_caption)
+                                
+                                analysis_display += f"## 🤖 Description IA (CLIP 50 prompts):\n\n**{main_type_only}**\n\n"
+                                analysis_display += f"## 🎨 Couleurs détectées (TOP 3):\n\n**{colors_detailed}**\n\n"
+                                
+                                # Ajouter le texte OCR si disponible
                                 if extracted_text_info and "Aucun texte" not in extracted_text_info:
-                                    analysis_display += f"## 📝 Texte Extrait:\n\n{extracted_text_info}\n\n---\n\n"
+                                    text_words = re.findall(r'✅.*?\]\s*(.*?)$', extracted_text_info, re.MULTILINE)
+                                    if text_words:
+                                        unique_words = list(set([w.strip() for w in text_words if len(w.strip()) > 1]))
+                                        if unique_words:
+                                            analysis_display += f"## 📝 Texte OCR: **{', '.join(unique_words[:10])}**\n\n"
                                 
-                                analysis_display += f"## 🤖 Analyse IA Complète:\n\n{enriched_analysis}"
+                                # Ajouter YOLO si disponible
+                                if yolo_detections:
+                                    yolo_top = sorted(yolo_detections, key=lambda x: x['confidence'], reverse=True)[:5]
+                                    yolo_str = ", ".join([f"{d['class']} ({d['confidence']:.0%})" for d in yolo_top])
+                                    analysis_display += f"## 🎯 Objets YOLO détectés: **{yolo_str}**\n\n"
                                 
-                                # Ajouter l'analyse au chat
+                                # Ajouter résultats web si disponibles
+                                if web_results_text:
+                                    analysis_display += f"## 🌐 Informations Web ({len(web_results_text)} sources):\n\n"
+                                    for idx, res in enumerate(web_results_text[:3], 1):
+                                        analysis_display += f"**{idx}.** {res.get('title', 'Sans titre')[:80]}\n"
+                                        analysis_display += f"   _{res.get('body', '')[:150]}..._\n\n"
+                                
+                                analysis_display += f"## 🧠 Synthèse Intelligence Artificielle:\n\n{enriched_analysis}"
+                                
+                                # Ajouter l'analyse au chat (markdown pur sans HTML visible)
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
                                     "content": analysis_display
@@ -4429,6 +5640,11 @@ Analyse concise (max 150 mots):"""
                     # Affichage spécial pour les médias web
                     st.markdown(message["content"], unsafe_allow_html=True)
                 else:
+                    # Vérifier si c'est du HTML pur (panneau d'outils PDF)
+                    if message.get("is_html", False):
+                        st.markdown(message["content"], unsafe_allow_html=True)
+                        continue  # Skip le reste du formatage
+                    
                     # Formater la réponse avec Markdown pour structure
                     formatted_response = message["content"]
                     
@@ -4451,62 +5667,75 @@ Analyse concise (max 150 mots):"""
 }}}}
 
 .kibali-response-box h2 {{{{
-    color: #00ddff !important;
+    color: #0066cc !important;
     font-size: 1.6rem !important;
+    font-weight: 700 !important;
     margin-top: 1.5rem !important;
     margin-bottom: 1rem !important;
-    text-shadow: 0 0 15px rgba(0, 221, 255, 0.5);
 }}}}
 
 .kibali-response-box h3 {{{{
-    color: #00ff88 !important;
+    color: #00aa66 !important;
     font-size: 1.3rem !important;
+    font-weight: 700 !important;
     margin-top: 1.2rem !important;
     margin-bottom: 0.8rem !important;
-    text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
 }}}}
 
 .kibali-response-box p {{{{
-    color: #ffffff !important;
+    color: #1a1a1a !important;
+    font-weight: 600 !important;
+    font-size: 1.05rem !important;
     margin: 1rem 0 !important;
     line-height: 1.8 !important;
 }}}}
 
 .kibali-response-box ul, .kibali-response-box ol {{{{
-    color: #ffffff !important;
+    color: #1a1a1a !important;
+    font-weight: 600 !important;
 }}}}
 
 .kibali-response-box li {{{{
-    color: #ffffff !important;
+    color: #1a1a1a !important;
+    font-weight: 600 !important;
     margin: 0.5rem 0 !important;
 }}}}
 
 .kibali-response-box strong {{{{
-    color: #00ddff !important;
+    color: #0066cc !important;
+    font-weight: 700 !important;
+    font-size: 1.1rem !important;
 }}}}
 
 .kibali-response-box code {{{{
-    background: rgba(0, 255, 136, 0.1);
+    background: rgba(0, 170, 102, 0.1);
     padding: 0.2rem 0.4rem;
     border-radius: 4px;
-    color: #00ff88;
+    color: #00aa66;
+    font-weight: 600 !important;
 }}}}
 
 .kibali-response-box a {{{{
-    color: #00ddff !important;
+    color: #0066cc !important;
+    font-weight: 600 !important;
     text-decoration: underline;
+}}}}
+
+/* Forcer le texte NOIR et gras sur TOUT le contenu */
+.kibali-response-box * {{{{
+    color: #1a1a1a !important;
+    font-weight: 600 !important;
 }}}}
 </style>
 
 <div class="kibali-response-box" style="
-    background: linear-gradient(145deg, #1a1a2e 0%, #16213e 50%, #1a1a2e 100%);
+    background: rgba(255, 255, 255, 0.95);
     padding: 2rem;
     border-radius: 16px;
     margin: 2rem 0.5rem;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-    border: 2px solid;
-    border-image: linear-gradient(135deg, #00ff88, #0088ff, #00ff88) 1;
-    animation: borderShimmer 3s ease-in-out infinite, slideIn 0.5s ease-out;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15), 0 8px 40px rgba(0, 0, 0, 0.1);
+    border: 2px solid rgba(255, 255, 255, 0.8);
+    animation: slideIn 0.5s ease-out;
 ">
     <div style="
         display: flex; 
@@ -4654,15 +5883,28 @@ QUESTION UTILISATEUR: {prompt}"""
                         # Construire le contexte enrichi avec médias
                         full_context = f"CONTEXTE DISPONIBLE:\n{rag_context}{web_context}\n\nQUESTION: {enriched_prompt}"
                         
-                        # Générer avec le modèle local
-                        response = st.session_state.local_qwen_llm._generate(
-                            [{"role": "user", "content": full_context}], 
-                            stop=None, 
-                            run_manager=None
-                        ).content
+                        # 🌊 Générer avec le modèle local EN STREAMING
+                        from langchain_core.messages import HumanMessage
                         
-                        # Ajouter mention du mode local
-                        response = f"🏠 **Mode Local (Qwen 1.5B)** - Réponse générée localement\n\n{response}"
+                        with chat_container:
+                            with st.chat_message("assistant"):
+                                message_placeholder = st.empty()
+                                full_response = "🏠 **Mode Local (Qwen 1.5B)** - Réponse générée localement\n\n"
+                                
+                                # Utiliser _stream au lieu de _generate
+                                for chunk in st.session_state.local_qwen_llm._stream(
+                                    [HumanMessage(content=full_context)],
+                                    stop=None,
+                                    run_manager=None
+                                ):
+                                    if hasattr(chunk, 'content'):
+                                        full_response += chunk.content
+                                        message_placeholder.markdown(full_response + "▌")
+                                
+                                # Affichage final sans curseur
+                                message_placeholder.markdown(full_response)
+                        
+                        response = full_response
                         
                     except Exception as e:
                         response = f"❌ Erreur modèle local: {e}\n\nBasculement vers mode API..."
@@ -4869,7 +6111,7 @@ Répondez de manière détaillée et technique en exploitant TOUTES les données
 
 Réponds en utilisant toutes les sources disponibles (documents, outils, web) pour une réponse complète."""
                                 
-                                # Génération de la réponse finale avec historique adapté
+                                # Génération de la réponse finale avec historique adapté ET STREAMING
                                 client = create_client()
                                 has_media_context = bool(st.session_state.media_analysis_results)
                                 
@@ -4885,40 +6127,79 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                                     messages = recent_msgs + [{"role": "user", "content": final_prompt[:2000]}]
                                     max_tokens_response = 600
                                 
-                                response_obj = client.chat.completions.create(
-                                    model=WORKING_MODELS[model_choice],
-                                    messages=messages,
-                                    max_tokens=max_tokens_response,
-                                    temperature=0.3
-                                )
-                                response = response_obj.choices[0].message.content
+                                # 🌊 STREAMING ACTIVÉ - Affichage progressif des tokens
+                                with chat_container:
+                                    with st.chat_message("assistant"):
+                                        message_placeholder = st.empty()
+                                        full_response = ""
+                                        
+                                        # Créer le stream
+                                        stream = client.chat.completions.create(
+                                            model=WORKING_MODELS[model_choice],
+                                            messages=messages,
+                                            max_tokens=max_tokens_response,
+                                            temperature=0.3,
+                                            stream=True  # 🔥 ACTIVER LE STREAMING
+                                        )
+                                        
+                                        # Afficher chaque token au fur et à mesure
+                                        for chunk in stream:
+                                            if chunk.choices[0].delta.content is not None:
+                                                full_response += chunk.choices[0].delta.content
+                                                message_placeholder.markdown(full_response + "▌")
+                                        
+                                        # Affichage final sans curseur
+                                        message_placeholder.markdown(full_response)
+                                
+                                response = full_response
                                 
                             else:
-                                # Aucun outil spécifique trouvé, utiliser l'approche classique
-                                if not web_enabled:
-                                    docs = rag_search(prompt, st.session_state.vectordb, k=3)
-                                    response = generate_answer_enhanced(
-                                        prompt, docs, WORKING_MODELS[model_choice], include_sources=True
-                                    )
-                                else:
-                                    docs = hybrid_search_enhanced(prompt, st.session_state.vectordb, k=3, web_search_enabled=True)
-                                    response = generate_answer_enhanced(
-                                        prompt, docs, WORKING_MODELS[model_choice], include_sources=True
-                                    )
+                                # Aucun outil spécifique trouvé, utiliser l'approche classique avec STREAMING
+                                with chat_container:
+                                    with st.chat_message("assistant"):
+                                        message_placeholder = st.empty()
+                                        full_response = ""
+                                        
+                                        if not web_enabled:
+                                            docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                        else:
+                                            docs = hybrid_search_enhanced(prompt, st.session_state.vectordb, k=3, web_search_enabled=True)
+                                        
+                                        # 🌊 Streaming des chunks
+                                        for chunk in generate_answer_enhanced_stream(
+                                            prompt, docs, WORKING_MODELS[model_choice], include_sources=True
+                                        ):
+                                            full_response += chunk
+                                            message_placeholder.markdown(full_response + "▌")
+                                        
+                                        # Affichage final
+                                        message_placeholder.markdown(full_response)
+                                
+                                response = full_response
                         
                         except Exception as e:
                             st.error(f"Erreur système d'outils: {e}")
-                            # Fallback vers l'approche classique
-                            if not web_enabled:
-                                docs = rag_search(prompt, st.session_state.vectordb, k=3)
-                                response = generate_answer_enhanced(
-                                    prompt, docs, WORKING_MODELS[model_choice], include_sources=True
-                                )
-                            else:
-                                docs = hybrid_search_enhanced(prompt, st.session_state.vectordb, k=3, web_search_enabled=True)
-                                response = generate_answer_enhanced(
-                                    prompt, docs, WORKING_MODELS[model_choice], include_sources=True
-                                )
+                            # Fallback vers l'approche classique avec STREAMING
+                            with chat_container:
+                                with st.chat_message("assistant"):
+                                    message_placeholder = st.empty()
+                                    full_response = ""
+                                    
+                                    if not web_enabled:
+                                        docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                    else:
+                                        docs = hybrid_search_enhanced(prompt, st.session_state.vectordb, k=3, web_search_enabled=True)
+                                    
+                                    # 🌊 Streaming des chunks
+                                    for chunk in generate_answer_enhanced_stream(
+                                        prompt, docs, WORKING_MODELS[model_choice], include_sources=True
+                                    ):
+                                        full_response += chunk
+                                        message_placeholder.markdown(full_response + "▌")
+                                    
+                                    message_placeholder.markdown(full_response)
+                            
+                            response = full_response
                     
                     else:
                         # Système d'outils non disponible, utiliser l'approche classique
@@ -4934,10 +6215,24 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                         
                         try:
                             if not web_enabled:
-                                docs = rag_search(prompt, st.session_state.vectordb, k=3)
-                                response = generate_answer_enhanced(
-                                    prompt, docs, st.session_state.current_model, include_sources=True
-                                )
+                                # Mode RAG simple avec STREAMING
+                                with chat_container:
+                                    with st.chat_message("assistant"):
+                                        message_placeholder = st.empty()
+                                        full_response = ""
+                                        
+                                        docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                        
+                                        # 🌊 Streaming
+                                        for chunk in generate_answer_enhanced_stream(
+                                            prompt, docs, st.session_state.current_model, include_sources=True
+                                        ):
+                                            full_response += chunk
+                                            message_placeholder.markdown(full_response + "▌")
+                                        
+                                        message_placeholder.markdown(full_response)
+                                
+                                response = full_response
                             else:
                                 # Recherche web avec médias pour mode classique
                                 try:
@@ -4950,10 +6245,22 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                         except Exception as e:
                             response = f"❌ Erreur: {e}\n\nTentative avec recherche locale..."
                             try:
-                                docs = rag_search(prompt, st.session_state.vectordb, k=3)
-                                response = generate_answer_enhanced(
-                                    prompt, docs, st.session_state.current_model
-                                )
+                                with chat_container:
+                                    with st.chat_message("assistant"):
+                                        message_placeholder = st.empty()
+                                        full_response = ""
+                                        
+                                        docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                        
+                                        for chunk in generate_answer_enhanced_stream(
+                                            prompt, docs, st.session_state.current_model
+                                        ):
+                                            full_response += chunk
+                                            message_placeholder.markdown(full_response + "▌")
+                                        
+                                        message_placeholder.markdown(full_response)
+                                
+                                response = full_response
                             except:
                                 response = f"❌ Erreur complète: {e}"
             
@@ -5144,124 +6451,56 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
             if uploaded_image:
                 with st.spinner("🔬 Analyse IA en cours..."):
                     
-                    # Charger vision_models d'abord pour l'analyse des objets
+                    # Charger tous les modèles nécessaires
                     vision_models = None
-                    try:
-                        vision_models = load_vision_models()
-                    except:
-                        pass
-                    
-                    # 1. Analyse traditionnelle (OpenCV) avec IA
-                    analysis_data, proc_images, tables_str = process_image(uploaded_image.getvalue(), vision_models=vision_models)
-                    
-                    # 2. Analyse avancée avec Vision AI (CLIP) + OCR
-                    st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                    st.markdown("### 🤖 Analyse Vision AI + OCR")
-                    
-                    # Initialiser les variables
-                    clip_analysis = {}
-                    extracted_texts = []
+                    ocr_reader = None
+                    yolo_model = None
+                    blip_models = None
                     
                     try:
-                        # Charger les modèles Vision
-                        with st.spinner("📥 Chargement des modèles Vision AI (mode local prioritaire)..."):
+                        with st.spinner("📥 Chargement CLIP..."):
                             vision_models = load_vision_models()
-                            if vision_models is None:
-                                st.error("❌ Impossible de charger les modèles Vision AI")
-                                st.warning("⚠️ Les modèles CLIP ne sont pas disponibles localement")
-                                st.info(f"💡 Téléchargez les modèles avec: huggingface-cli download {CLIP_MODEL_NAME}")
-                                st.code(f"Cache attendu: {CLIP_CACHE_DIR}", language="bash")
-                                st.markdown('</div>', unsafe_allow_html=True)
-                                st.stop()
-                            else:
-                                st.success(f"✅ Modèles Vision chargés ({vision_models['mode']}) sur {vision_models['device']}")
-                            
-                            clip_model = vision_models['clip_model']
-                            clip_processor = vision_models['clip_processor']
-                        
-                        # Sauvegarder l'image temporairement
-                        import tempfile
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
-                            tmp_file.write(uploaded_image.getvalue())
-                            tmp_path = tmp_file.name
-                        
-                        # Charger le reader OCR
-                        with st.spinner("📝 Chargement du moteur OCR..."):
-                            ocr_reader = load_ocr_reader()
-                        
-                        # Extraire le texte (OCR)
-                        with st.spinner("🔍 Extraction du texte..."):
-                            extracted_texts = extract_text_from_image(tmp_path, ocr_reader)
-                        
-                        # Afficher le texte extrait
-                        if extracted_texts:
-                            st.markdown("#### 📝 Texte extrait de l'image")
-                            organized_text = organize_extracted_text(extracted_texts)
-                            st.text_area("Texte détecté", value=organized_text, height=200, disabled=True)
-                        else:
-                            st.info("ℹ️")
-                        
-                        # Analyser avec CLIP
-                        with st.spinner("🎨 Analyse sémantique (CLIP)..."):
-                            caption, results = analyze_image_with_clip(tmp_path, vision_models)
-                            
-                            if results:
-                                # Convertir en dictionnaire pour compatibilité
-                                clip_analysis = {result['label']: result['confidence'] for result in results}
-                        
-                        # Afficher les résultats CLIP avec précision et exactitude
-                        if clip_analysis:
-                            st.markdown("#### 🎯 Analyse sémantique (catégories détectées)")
-                            
-                            # Créer un DataFrame avec précision et exactitude
-                            import pandas as pd
-                            
-                            # Calculer les métriques de qualité
-                            total_confidence = sum(clip_analysis.values())
-                            max_confidence = max(clip_analysis.values())
-                            min_confidence = min(clip_analysis.values())
-                            
-                            categories_df = pd.DataFrame({
-                                'Catégorie': list(clip_analysis.keys()),
-                                'Confiance': [f"{v*100:.2f}%" for v in clip_analysis.values()],
-                                'Score normalisé': [f"{(v/max_confidence)*100:.1f}%" for v in clip_analysis.values()],
-                                'Fiabilité': ['Haute' if v > 0.5 else 'Moyenne' if v > 0.3 else 'Faible' for v in clip_analysis.values()]
-                            })
-                            
-                            st.dataframe(categories_df, use_container_width=True)
-                            
-                            # Métriques de qualité de l'analyse
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("🎯 Précision maximale", f"{max_confidence*100:.2f}%")
-                            with col2:
-                                st.metric("📉 Fiabilité moyenne", f"{(total_confidence/len(clip_analysis))*100:.2f}%")
-                            with col3:
-                                st.metric("✅ Exactitude", f"{(max_confidence/total_confidence)*100:.1f}%")
-                            
-                            # Visualisation graphique améliorée
-                            fig, ax = plt.subplots(figsize=(10, 6))
-                            categories = list(clip_analysis.keys())
-                            scores = [v * 100 for v in clip_analysis.values()]
-                            colors = ['#2E7D32' if s > 50 else '#FFA726' if s > 30 else '#EF5350' for s in scores]
-                            bars = ax.barh(categories, scores, color=colors)
-                            
-                            # Ajouter les valeurs sur les barres
-                            for i, (bar, score) in enumerate(zip(bars, scores)):
-                                ax.text(score + 1, i, f'{score:.2f}%', va='center', fontsize=9)
-                            
-                            ax.set_xlabel('Score de confiance (%)', fontsize=12)
-                            ax.set_title('Analyse sémantique de l\'image (avec précision)', fontsize=14, fontweight='bold')
-                            ax.set_xlim(0, 105)
-                            ax.grid(axis='x', alpha=0.3, linestyle='--')
-                            st.pyplot(fig)
-                        
-                        # Nettoyer le fichier temporaire
-                        import os
-                        os.unlink(tmp_path)
-                        
                     except Exception as e:
-                        st.error(f"❌ Erreur lors de l'analyse Vision AI: {str(e)}")
+                        st.warning(f"⚠️ CLIP non disponible: {e}")
+                    
+                    try:
+                        with st.spinner("📝 Chargement OCR..."):
+                            ocr_reader = load_ocr_reader()
+                    except Exception as e:
+                        st.warning(f"⚠️ OCR non disponible: {e}")
+                    
+                    try:
+                        with st.spinner("🎯 Chargement YOLO..."):
+                            yolo_model = load_yolo_model()
+                            if yolo_model:
+                                st.success("✅ YOLO chargé pour détection d'objets")
+                    except Exception as e:
+                        st.warning(f"⚠️ YOLO non disponible: {e}")
+                    
+                    try:
+                        with st.spinner("🖼️ Chargement BLIP..."):
+                            blip_models = load_blip_model()
+                            if blip_models:
+                                st.success("✅ BLIP chargé pour descriptions détaillées")
+                    except Exception as e:
+                        st.warning(f"⚠️ BLIP non disponible: {e}")
+                    
+                    # 1. Analyse complète: OpenCV + YOLO + CLIP + BLIP + OCR
+                    analysis_data, proc_images, tables_str = process_image(
+                        uploaded_image.getvalue(), 
+                        vision_models=vision_models,
+                        ocr_reader=ocr_reader,
+                        yolo_model=yolo_model,
+                        blip_models=blip_models
+                    )
+                    
+                    # 2. Afficher la description BLIP + OCR en priorité
+                    st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+                    st.markdown("### 🖼️ Analyse IA Complète (BLIP + OCR + YOLO + CLIP)")
+                    
+                    # BLIP et OCR sont déjà dans tables_str, les afficher directement
+                    if tables_str:
+                        st.markdown(tables_str, unsafe_allow_html=True)
                     
                     st.markdown('</div>', unsafe_allow_html=True)
                     
@@ -5277,74 +6516,60 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                                 st.markdown('</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
                     
-                    # 4. Afficher les tableaux d'analyse
-                    if tables_str:
-                        st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-                        st.markdown(tables_str, unsafe_allow_html=True)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # 5. Génération de rapport complet avec LLM
+                    # 4. Génération de rapport complet avec LLM
                     st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
                     st.markdown("### 🤖 Rapport d'analyse IA complet")
                     
                     with st.spinner("✍️ Génération du rapport détaillé..."):
-                        # Combiner toutes les informations avec détails scientifiques
-                        clip_info = "\n".join([f"- {cat}: {score*100:.2f}% (Précision: {score:.4f})" for cat, score in clip_analysis.items()]) if clip_analysis else "Aucune analyse CLIP disponible"
-                        
-                        # Description détaillée des objets détectés
-                        objects_description = ""
-                        if 'objects_detected' in analysis_data and analysis_data['objects_detected']:
-                            objects_description = "\n### Objets détectés avec analyse IA contextuelle:\n"
-                            for obj in analysis_data['objects_detected']:
-                                objects_description += f"""
-- **Objet #{obj['id']}**: {obj['type']}
-  - Confiance IA: {obj['confidence']*100:.1f}%
-  - Dimensions: {obj['width_m']:.2f}m x {obj['height_m']:.2f}m
-  - Surface: {obj['area_m2']:.2f} m²
-  - Périmètre: {obj['perimeter_m']:.2f} m
-  - Couleur dominante: {obj['color']}
-"""
-                        
-                        combined_info = f"""
-Analyse scientifique approfondie de l'image:
-
-### Vision AI (CLIP) - Analyse sémantique:
-{clip_info}
-
-### Texte extrait (OCR):
-{organized_text if extracted_texts else "Aucun texte détecté"}
-
-{objects_description}
-
-### Analyses techniques complètes:
-- Nombre total d'objets: {analysis_data.get('num_objects', 0)}
-- Classification du sol: {analysis_data.get('soil', 'N/A')}
-- Clôtures détectées: {analysis_data.get('num_fences', 0)}
-- Anomalies: {', '.join(analysis_data.get('anomalies', ['Aucune']))}
-- Analyses avancées: {len(analysis_data.get('analyses', []))} métriques calculées
-
-Génère un rapport scientifique détaillé décrivant précisément ce qui est visible dans cette image,
-avec une analyse contextuelle des objets détectés et leurs caractéristiques métriques réelles.
-"""
+                        # Utiliser la fonction de description complète
+                        comprehensive_desc = generate_comprehensive_description(analysis_data)
                         
                         # Générer le rapport avec le LLM
                         llm_model = st.session_state.get('llm_model') or st.session_state.get('current_model')
                         
                         if llm_model:
                             try:
-                                report = improve_analysis_with_llm(combined_info, llm_model)
-                                # Afficher le rapport avec style blanc gras
-                                st.markdown(f'<div style="color: white; font-weight: 600; font-size: 1.1rem; line-height: 1.8; background: rgba(74, 74, 126, 0.3); padding: 1.5rem; border-radius: 12px; border-left: 4px solid var(--kibali-green);">{report}</div>', unsafe_allow_html=True)
+                                improved_analysis = improve_analysis_with_llm(analysis_data, llm_model)
+                                
+                                # Afficher d'abord la description structurée
+                                st.markdown(f"""
+                                <div style="color: white; font-weight: 600; font-size: 1.1rem; line-height: 1.8; 
+                                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                                padding: 1.5rem; border-radius: 12px; margin-bottom: 1rem;">
+                                <h4 style="color: white; margin-top: 0;">📋 Description structurée:</h4>
+                                {comprehensive_desc.replace(chr(10), '<br>')}
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
+                                # Puis l'analyse enrichie par le LLM
+                                st.markdown(f"""
+                                <div style="color: white; font-weight: 600; font-size: 1.1rem; line-height: 1.8; 
+                                background: rgba(74, 74, 126, 0.3); padding: 1.5rem; border-radius: 12px; 
+                                border-left: 4px solid var(--kibali-green);">
+                                <h4 style="color: white; margin-top: 0;">🤖 Analyse IA enrichie:</h4>
+                                {improved_analysis}
+                                </div>
+                                """, unsafe_allow_html=True)
+                                
                             except Exception as e:
                                 st.error(f"❌ Erreur génération rapport: {str(e)}")
-                                # Afficher au moins les données brutes
-                                st.markdown(f'<div style="color: white; font-weight: 600; font-size: 1.05rem; line-height: 1.6; background: rgba(74, 74, 126, 0.3); padding: 1.5rem; border-radius: 12px;"><pre style="color: white; white-space: pre-wrap;">{combined_info}</pre></div>', unsafe_allow_html=True)
+                                # Afficher au moins la description structurée
+                                st.markdown(f"""
+                                <div style="color: white; font-weight: 600; font-size: 1.1rem; line-height: 1.8; 
+                                background: rgba(74, 74, 126, 0.3); padding: 1.5rem; border-radius: 12px;">
+                                {comprehensive_desc.replace(chr(10), '<br>')}
+                                </div>
+                                """, unsafe_allow_html=True)
+                                improved_analysis = comprehensive_desc
                         else:
-                            # Afficher les données brutes formatées si pas de LLM
-                            st.markdown(f'<div style="color: white; font-weight: 600; font-size: 1.05rem; line-height: 1.6; background: rgba(74, 74, 126, 0.3); padding: 1.5rem; border-radius: 12px;"><pre style="color: white; white-space: pre-wrap;">{combined_info}</pre></div>', unsafe_allow_html=True)
-                        
-                        improved_analysis = improve_analysis_with_llm(combined_info, st.session_state.current_model)
-                        st.text_area("📋 Rapport complet", value=improved_analysis, height=400, disabled=True)
+                            # Afficher la description structurée si pas de LLM
+                            st.markdown(f"""
+                            <div style="color: white; font-weight: 600; font-size: 1.1rem; line-height: 1.8; 
+                            background: rgba(74, 74, 126, 0.3); padding: 1.5rem; border-radius: 12px;">
+                            {comprehensive_desc.replace(chr(10), '<br>')}
+                            </div>
+                            """, unsafe_allow_html=True)
+                            improved_analysis = comprehensive_desc
                     
                     st.markdown('</div>', unsafe_allow_html=True)
                     
@@ -5932,7 +7157,6 @@ avec une analyse contextuelle des objets détectés et leurs caractéristiques m
                     
                     import base64
                     from io import BytesIO
-                    import os
                     
                     for idx, path in enumerate(st.session_state.current_ordered_paths[:30]):
                         try:
