@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  kibali-ia:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kibali-ia
+    image: kibali-ia:nas
+    
+    # Variables d'environnement pour NAS (CPU uniquement)
+    environment:
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      # Forcer CPU (pas de GPU sur NAS)
+      - CUDA_VISIBLE_DEVICES=""
+      - FORCE_CPU=1
+    
+    # Volumes pour persistance des données
+    volumes:
+      # Données utilisateur
+      - ./kibali_data/pdfs:/app/kibali_data/pdfs
+      - ./kibali_data/graphs:/app/kibali_data/graphs
+      - ./kibali_data/vectordb:/app/kibali_data/vectordb
+      - ./kibali_data/web_cache.json:/app/kibali_data/web_cache.json
+      # Modèles (IMPORTANT: les modèles seront copiés dans l'image lors du build)
+      - ./kibali_data/models:/app/kibali_data/models
+      # Outputs
+      - ./outputs:/app/outputs
+    
+    # Ports
+    ports:
+      - "8501:8501"
+    
+    # Limites ressources (adapté pour NAS)
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Health check
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8501/_stcore/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Network
+    networks:
+      - kibali-network
+
+networks:
+  kibali-network:
+    driver: bridge
