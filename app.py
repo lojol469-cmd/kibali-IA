@@ -8,6 +8,11 @@
 # ===============================================
 import os
 from pathlib import Path
+
+# ⚠️ FORCER CPU AVANT TOUT IMPORT PYTORCH/TRANSFORMERS
+os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Désactiver CUDA complètement pour éviter erreurs kernel
+os.environ['FORCE_CPU'] = '1'
+
 # Charger le token depuis .env
 from dotenv import load_dotenv
 
@@ -38,6 +43,52 @@ from offline_manager import (
     render_offline_status_card,
     get_offline_capabilities
 )
+
+# Import du système d'auto-apprentissage et nano-IA
+sys.path.insert(0, str(script_dir / "kibali_data" / "models"))
+
+# Import du détecteur de structure binaire
+from binary_structure_detector import BinaryStructureDetector, detect_and_analyze_file
+
+# Import de l'analyseur ERT (Electrical Resistivity Tomography)
+try:
+    from ert_analyzer import ERTAnalyzer
+    ERT_AVAILABLE = True
+except ImportError:
+    ERT_AVAILABLE = False
+    print("⚠️ Module ERT non disponible")
+try:
+    from binary_structure_detector import (
+        BinaryStructureDetector, 
+        FileStructureType, 
+        detect_and_analyze_file
+    )
+    BINARY_DETECTOR_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Détecteur de structure binaire non disponible: {e}")
+    BINARY_DETECTOR_AVAILABLE = False
+
+# Import du système d'auto-apprentissage
+try:
+    from auto_learning import get_auto_learning
+    from knowledge_manager import get_knowledge_manager
+    AUTO_LEARNING_AVAILABLE = True
+    print("✅ Système d'auto-apprentissage chargé")
+except Exception as e:
+    print(f"⚠️ Auto-apprentissage non disponible: {e}")
+    AUTO_LEARNING_AVAILABLE = False
+    get_auto_learning = None
+    get_knowledge_manager = None
+
+# Import de l'orchestrateur maître d'IA
+try:
+    from task_orchestrator import analyze_and_plan, get_ai_relay, TaskType
+    from master_orchestrator import get_orchestrator, AISpecialist
+    ORCHESTRATOR_AVAILABLE = True
+    print("✅ Orchestrateur maître d'IA chargé")
+except Exception as e:
+    print(f"⚠️ Orchestrateur non disponible: {e}")
+    ORCHESTRATOR_AVAILABLE = False
 
 # Initialiser les dossiers de modèles
 ensure_model_dirs()
@@ -111,7 +162,79 @@ from langchain_huggingface import HuggingFaceEndpoint
 from langchain.agents import initialize_agent, Tool
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
-from transformers import CLIPProcessor, CLIPModel, AutoTokenizer, AutoModelForCausalLM
+
+# Import conditionnel de CLIP
+try:
+    from transformers import CLIPProcessor, CLIPModel
+except ImportError:
+    try:
+        # Essayer l'import alternatif pour les anciennes versions
+        from transformers import AutoProcessor as CLIPProcessor, AutoModel as CLIPModel
+    except ImportError:
+        CLIPProcessor = None
+        CLIPModel = None
+        print("⚠️ CLIP non disponible - Analyse sémantique d'images désactivée")
+
+# Import des modèles de génération de texte
+try:
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+except ImportError:
+    AutoTokenizer = None
+    AutoModelForCausalLM = None
+    print("⚠️ Modèles Hugging Face non disponibles")
+
+# ═══════════════════════════════════════════════════════════════════
+# FONCTION DE NETTOYAGE DES RÉPONSES
+# ═══════════════════════════════════════════════════════════════════
+
+def clean_response_text(text: str) -> str:
+    """
+    Nettoie le texte de réponse en supprimant les caractères non-latins
+    (chinois, arabe, cyrillique, etc.) qui peuvent apparaître par erreur
+    """
+    import re
+    
+    if not text:
+        return text
+    
+    # Détecter et supprimer les blocs de texte chinois/asiatique
+    # Plages Unicode pour caractères CJK (chinois, japonais, coréen)
+    text = re.sub(r'[\u4e00-\u9fff\u3400-\u4dbf\u20000-\u2a6df\u2a700-\u2b73f\u2b740-\u2b81f\u2b820-\u2ceaf\uf900-\ufaff\u3300-\u33ff\ufe30-\ufe4f\uf900-\ufaff\u2f800-\u2fa1f]+', '', text)
+    
+    # Supprimer les caractères arabes
+    text = re.sub(r'[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]+', '', text)
+    
+    # Supprimer les caractères cyrilliques (russe, ukrainien, etc.)
+    text = re.sub(r'[\u0400-\u04ff\u0500-\u052f\u2de0-\u2dff\ua640-\ua69f\u1c80-\u1c8f]+', '', text)
+    
+    # Supprimer les caractères coréens Hangul
+    text = re.sub(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\ud7b0-\ud7ff]+', '', text)
+    
+    # Supprimer les caractères japonais (hiragana, katakana)
+    text = re.sub(r'[\u3040-\u309f\u30a0-\u30ff]+', '', text)
+    
+    # Nettoyer les espaces multiples consécutifs
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Nettoyer les sauts de ligne excessifs
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    
+    return text.strip()
+
+# Import du gestionnaire de fichiers binaires scientifiques
+try:
+    from binary_file_handler import (
+        BinaryFileHandler, 
+        BinaryFileViewer, 
+        SCIENTIFIC_BINARY_FORMATS,
+        analyze_binary_file,
+        create_hex_viewer_ui
+    )
+    BINARY_HANDLER_AVAILABLE = True
+    print(f"✅ Gestionnaire de fichiers binaires chargé - {len(SCIENTIFIC_BINARY_FORMATS)} formats supportés")
+except ImportError as e:
+    BINARY_HANDLER_AVAILABLE = False
+    print(f"⚠️ Gestionnaire de fichiers binaires non disponible: {e}")
 
 # Import YOLO pour détection d'objets
 try:
@@ -585,10 +708,12 @@ def load_existing_graph():
 def process_pdfs():
     """Traiter les PDFs"""
     print("📄 Traitement des PDFs...")
+    # CPU forcé globalement au début du fichier
     embedding_model = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
-        model_kwargs={'local_files_only': True}
+        model_kwargs={'device': 'cpu'},
+        encode_kwargs={'device': 'cpu', 'batch_size': 32}
     )
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -663,10 +788,12 @@ Distance: {traj.get('distance', 0)/1000:.2f} km"""
 def load_vectordb():
     """Charger la base vectorielle"""
     try:
+        # CPU forcé globalement au début du fichier
         embedding_model = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
             cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
-            model_kwargs={'local_files_only': True}
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'device': 'cpu', 'batch_size': 32}
         )
         
         # Vérifier si la base existe
@@ -4795,26 +4922,65 @@ def main():
     if 'media_analysis_results' not in st.session_state:
         st.session_state.media_analysis_results = []
     
+    # Initialisation du tracking des fichiers uploadés pour persistance du contexte
+    if 'has_pdf_context' not in st.session_state:
+        st.session_state.has_pdf_context = False
+    if 'chat_uploaded_pdfs' not in st.session_state:
+        st.session_state.chat_uploaded_pdfs = []
+    if 'binary_files' not in st.session_state:
+        st.session_state.binary_files = []
+    
     # 🧠 NOUVEAU: Initialisation de la mémoire vectorielle des conversations
     if 'chat_vectordb' not in st.session_state:
         from chat_memory import load_chat_vectordb
         st.session_state.chat_vectordb, memory_msg = load_chat_vectordb()
         if st.session_state.chat_vectordb:
             print(memory_msg)
+    
+    # 🤖 NOUVEAU: Initialisation du système d'auto-apprentissage
+    if 'auto_learning' not in st.session_state and AUTO_LEARNING_AVAILABLE:
+        st.session_state.auto_learning = get_auto_learning()
+        st.session_state.knowledge_manager = get_knowledge_manager()
+        print("🧠 Auto-apprentissage initialisé")
 
     # ===============================================
     # Onglets avec design fluide
     # ===============================================
     tab_names = ["⚙️ **Configuration**", "💬 **Chat RAG + Web**", "🗺️ **Trajets**", "📸 **Analyse Image**", "🌐 **Recherche Web**", "📷 **Photogrammétrie**"]
+    
+    # Ajouter l'onglet binaire si le gestionnaire est disponible
+    if BINARY_HANDLER_AVAILABLE:
+        tab_names.append("🔬 **Fichiers Binaires**")
+    
     if TOOLS_SYSTEM_AVAILABLE and st.session_state.tool_manager:
         tab_names.append("🔧 **Outils Dynamiques**")
+    
+    # Onglet Nano-IA si auto-apprentissage disponible
+    if AUTO_LEARNING_AVAILABLE:
+        tab_names.append("🤖 **Nano-IA & Apprentissage**")
     
     tabs = st.tabs(tab_names)
     
     # Assignation des onglets
     tab1, tab2, tab3, tab4, tab5, tab_photo = tabs[:6]
-    if len(tabs) > 6:
-        tab6 = tabs[6]
+    
+    # Onglet binaire si disponible
+    tab_binary = None
+    current_tab_idx = 6
+    if BINARY_HANDLER_AVAILABLE and len(tabs) > 6:
+        tab_binary = tabs[current_tab_idx]
+        current_tab_idx += 1
+    
+    # Onglet outils dynamiques si disponible
+    tab_tools = None
+    if TOOLS_SYSTEM_AVAILABLE and st.session_state.tool_manager and len(tabs) > current_tab_idx:
+        tab_tools = tabs[current_tab_idx]
+        current_tab_idx += 1
+    
+    # Onglet Nano-IA si disponible
+    tab_nano_ai = None
+    if AUTO_LEARNING_AVAILABLE and len(tabs) > current_tab_idx:
+        tab_nano_ai = tabs[current_tab_idx]
 
     # ===============================================
     # Onglet 1: Configuration avec cartes
@@ -4828,8 +4994,8 @@ def main():
         with col1:
             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
             pdf_files = st.file_uploader(
-                "📤 **Upload PDFs**", 
-                type=["pdf"], 
+                "📤 **Upload Documents (tous formats acceptés)**", 
+                type=None, 
                 accept_multiple_files=True,
                 key="pdf_upload"
             )
@@ -4846,8 +5012,8 @@ def main():
         with col2:
             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
             pbf_file = st.file_uploader(
-                "📤 **Upload fichier OSM (.pbf)**", 
-                type=["pbf"],
+                "📤 **Upload fichier OSM (tous formats acceptés)**", 
+                type=None,
                 key="pbf_upload"
             )
             if pbf_file:
@@ -4860,7 +5026,7 @@ def main():
                 st.success(status)
             st.markdown('</div>', unsafe_allow_html=True)
         
-        col3, col4, col5 = st.columns(3)
+        col3, col4, col5, col6 = st.columns(4)
         with col3:
             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
             if st.button("🔄 **Traiter PDFs**", key="process_pdfs", help="Traite les PDFs uploadés pour créer la base vectorielle"):
@@ -4889,14 +5055,31 @@ def main():
                     st.success(status)
             st.markdown('</div>', unsafe_allow_html=True)
         
+        with col6:
+            st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
+            if st.button("🧹 **Vider Cache**", key="clear_streamlit_cache", help="Vide le cache Streamlit et rafraîchit l'application", type="primary"):
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                st.success("✅ Cache vidé !")
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+        
         st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-        col6, col7 = st.columns(2)
+        col6, col7, col8 = st.columns(3)
         with col6:
             if st.button("🗑️ **Vider cache web**", key="clear_cache", help="Nettoie le cache web des anciennes recherches"):
                 status = handle_clear_cache()
                 st.success(status)
         
         with col7:
+            if st.button("💬 **Vider historique chat**", key="clear_chat_history", help="Efface tout l'historique de conversation", type="secondary"):
+                st.session_state.chat_history = []
+                st.session_state.processed_files = set()
+                st.session_state.media_analysis_results = []
+                st.success("✅ Historique vidé !")
+                st.rerun()
+        
+        with col8:
             if st.button("📊 **Voir statistiques**", key="show_stats", help="Affiche les statistiques détaillées du système"):
                 stats = get_system_status()
                 st.json(stats)
@@ -4955,39 +5138,61 @@ def main():
         with col_attach1:
             uploaded_images = st.file_uploader(
                 "📎", label_visibility="collapsed",
-                type=["jpg", "jpeg", "png", "gif", "bmp", "webp"],
+                type=None,
                 accept_multiple_files=True,
                 key="image_uploader",
-                help="🖼️ Ajouter des images"
+                help="🖼️ Ajouter des fichiers (tous formats acceptés)"
             )
         
         with col_attach2:
             uploaded_audios = st.file_uploader(
                 "📎", label_visibility="collapsed",
-                type=["mp3", "wav", "ogg", "m4a", "flac"],
+                type=None,
                 accept_multiple_files=True,
                 key="audio_uploader",
-                help="🎵 Ajouter des fichiers audio"
+                help="🎵 Ajouter des fichiers (tous formats acceptés)"
             )
         
         with col_attach3:
             uploaded_videos = st.file_uploader(
                 "📎", label_visibility="collapsed",
-                type=["mp4", "avi", "mov", "mkv", "webm"],
+                type=None,
                 accept_multiple_files=True,
                 key="video_uploader",
-                help="🎥 Ajouter des vidéos"
+                help="🎥 Ajouter des fichiers (tous formats acceptés)"
             )
         
-        # Nouvelle colonne pour les PDFs
+        # Nouvelle colonne pour les documents
         st.markdown("**📄 Ajouter des documents:**")
         uploaded_pdfs = st.file_uploader(
-            "📎 PDF", label_visibility="collapsed",
-            type=["pdf"],
+            "📎 Tous fichiers", label_visibility="collapsed",
+            type=None,
             accept_multiple_files=True,
             key="pdf_chat_uploader",
-            help="📄 Ajouter des PDFs (ajoutés automatiquement au RAG vectoriel)"
+            help="📄 Ajouter des fichiers (tous formats acceptés - ajoutés automatiquement au RAG vectoriel)"
         )
+        
+        # 🌊 Uploader ERT pour fichiers .dat
+        st.markdown("**🌊 Analyse ERT (géophysique):**")
+        dat_file = st.file_uploader(
+            "📎 Fichier .dat", label_visibility="collapsed",
+            type=["dat"],
+            key="dat_upload",
+            help="🌊 Fichier .dat pour analyse ERT (Electrical Resistivity Tomography)"
+        )
+        if dat_file:
+            # Sauvegarder temporairement le fichier
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.dat') as tmp:
+                tmp.write(dat_file.getbuffer())
+                tmp_path = tmp.name
+            
+            # Stocker dans session_state pour l'orchestration
+            st.session_state.uploaded_dat_file = {
+                'name': dat_file.name,
+                'path': tmp_path,
+                'size': dat_file.size
+            }
         
         # Initialiser le tracking des fichiers traités
         if 'processed_files' not in st.session_state:
@@ -5001,98 +5206,133 @@ def main():
         new_media_analyzed = False
         
         # ===============================================
-        # TRAITEMENT DES PDFs UPLOADÉS DANS LE CHAT
+        # TRAITEMENT INTELLIGENT DES FICHIERS UPLOADÉS
         # ===============================================
         if uploaded_pdfs:
-            for pdf_file in uploaded_pdfs:
+            for uploaded_file in uploaded_pdfs:
                 # Vérifier si déjà traité
-                file_key = f"pdf_{pdf_file.name}_{pdf_file.size}"
+                file_key = f"file_{uploaded_file.name}_{uploaded_file.size}"
                 if file_key in st.session_state.processed_files:
                     continue  # Skip si déjà traité
                 
                 # Marquer comme en cours de traitement
                 st.session_state.processed_files.add(file_key)
                 
-                # Message utilisateur
-                st.session_state.chat_history.append({
-                    "role": "user",
-                    "content": f"📄 PDF uploadé: {pdf_file.name}"
-                })
+                # Détection automatique du type de fichier
+                file_ext = Path(uploaded_file.name).suffix.lower()
+                is_pdf = file_ext == '.pdf'
                 
-                # Traitement du PDF
-                with st.spinner(f"📄 Traitement de {pdf_file.name}..."):
-                    try:
-                        # 1. Sauvegarder le PDF dans PDFS_PATH
-                        pdf_path = os.path.join(PDFS_PATH, pdf_file.name)
-                        with open(pdf_path, 'wb') as f:
-                            f.write(pdf_file.getbuffer())
-                        
-                        st.success(f"✅ PDF sauvegardé: {pdf_file.name}")
-                        
-                        # 2. Extraire le texte
-                        pdf_text = extract_text_from_pdf(pdf_path)
-                        pdf_pages = len(pdf_text.split('\n\n'))  # Approximation du nombre de pages
-                        word_count = len(pdf_text.split())
-                        
-                        st.info(f"📊 Extrait: ~{pdf_pages} pages, {word_count} mots")
-                        
-                        # 3. Ajouter au RAG vectoriel
-                        with st.spinner("🔄 Ajout au RAG vectoriel..."):
-                            # Charger l'embedding model
-                            embedding_model = HuggingFaceEmbeddings(
-                                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                                cache_folder=str(SENTENCE_TRANSFORMER_CACHE)
-                            )
+                # Lire les données pour vérifier le magic number
+                file_data = uploaded_file.read()
+                uploaded_file.seek(0)  # Reset pour réutilisation
+                is_pdf_magic = file_data.startswith(b'%PDF')
+                
+                # ============================================
+                # TRAITEMENT PDF (si c'est un vrai PDF)
+                # ============================================
+                if is_pdf or is_pdf_magic:
+                    # Message utilisateur
+                    st.session_state.chat_history.append({
+                        "role": "user",
+                        "content": f"📄 PDF uploadé: {uploaded_file.name}"
+                    })
+                    
+                    # Traitement du PDF
+                    with st.spinner(f"📄 Traitement de {uploaded_file.name}..."):
+                        try:
+                            # 1. Sauvegarder le PDF dans PDFS_PATH
+                            pdf_path = os.path.join(PDFS_PATH, uploaded_file.name)
+                            with open(pdf_path, 'wb') as f:
+                                f.write(file_data)
                             
-                            # Chunker le texte
-                            text_splitter = RecursiveCharacterTextSplitter(
-                                chunk_size=1000,
-                                chunk_overlap=100
-                            )
+                            st.success(f"✅ PDF sauvegardé: {uploaded_file.name}")
                             
-                            # Créer les documents
-                            chunks = text_splitter.split_text(pdf_text)
-                            documents = [
-                                Document(
-                                    page_content=chunk,
-                                    metadata={
-                                        "source": pdf_file.name,
-                                        "chunk_id": i,
-                                        "total_chunks": len(chunks)
-                                    }
+                            # 2. Extraire le texte
+                            pdf_text = extract_text_from_pdf(pdf_path)
+                            pdf_pages = len(pdf_text.split('\n\n'))  # Approximation du nombre de pages
+                            word_count = len(pdf_text.split())
+                            
+                            # Vérifier qu'il y a du texte extrait
+                            if not pdf_text.strip() or word_count == 0:
+                                st.warning("⚠️ Aucun texte extrait - PDF vide ou scanné")
+                                # Continuer quand même pour permettre l'analyse binaire si nécessaire
+                                continue
+                            
+                            st.info(f"📊 Extrait: ~{pdf_pages} pages, {word_count} mots")
+                            
+                            # 3. Ajouter au RAG vectoriel
+                            with st.spinner("🔄 Ajout au RAG vectoriel..."):
+                                # Charger l'embedding model
+                                embedding_model = HuggingFaceEmbeddings(
+                                    model_name="sentence-transformers/all-MiniLM-L6-v2",
+                                    cache_folder=str(SENTENCE_TRANSFORMER_CACHE)
                                 )
-                                for i, chunk in enumerate(chunks)
-                            ]
-                            
-                            # Ajouter à la vectordb existante ou créer nouvelle
-                            if st.session_state.vectordb:
-                                st.session_state.vectordb.add_documents(documents)
-                                st.success(f"✅ {len(chunks)} chunks ajoutés au RAG")
-                            else:
-                                # Créer nouvelle vectordb
-                                st.session_state.vectordb = FAISS.from_documents(
-                                    documents,
-                                    embedding_model
+                                
+                                # Chunker le texte
+                                text_splitter = RecursiveCharacterTextSplitter(
+                                    chunk_size=1000,
+                                    chunk_overlap=100
                                 )
+                                
+                                # Créer les documents
+                                chunks = text_splitter.split_text(pdf_text)
+                                
+                                # Vérifier qu'on a des chunks
+                                if not chunks or len(chunks) == 0:
+                                    st.warning("⚠️ Impossible de créer des chunks - texte trop court")
+                                    continue
+                                
+                                documents = [
+                                    Document(
+                                        page_content=chunk,
+                                        metadata={
+                                            "source": uploaded_file.name,
+                                            "chunk_id": i,
+                                            "total_chunks": len(chunks)
+                                        }
+                                    )
+                                    for i, chunk in enumerate(chunks)
+                                ]
+                                
+                                # Ajouter à la vectordb existante ou créer nouvelle
+                                if st.session_state.vectordb:
+                                    st.session_state.vectordb.add_documents(documents)
+                                    st.success(f"✅ {len(chunks)} chunks ajoutés au RAG")
+                                else:
+                                    # Créer nouvelle vectordb
+                                    st.session_state.vectordb = FAISS.from_documents(
+                                        documents,
+                                        embedding_model
+                                    )
                                 st.success(f"✅ RAG créé avec {len(chunks)} chunks")
                             
                             # Sauvegarder la vectordb
                             st.session_state.vectordb.save_local(VECTORDB_PATH)
                             st.success("💾 Base vectorielle sauvegardée")
-                        
-                        # 4. Stocker les infos du PDF pour le panneau d'outils
-                        pdf_info = {
-                            'name': pdf_file.name,
-                            'path': pdf_path,
-                            'text': pdf_text,
-                            'pages': pdf_pages,
-                            'word_count': word_count,
-                            'chunks': len(chunks)
-                        }
-                        st.session_state.chat_uploaded_pdfs.append(pdf_info)
-                        
-                        # 5. Message de succès avec panneau d'outils
-                        tools_panel_html = f'''
+                            
+                            # 4. Stocker les infos du PDF pour le panneau d'outils et contexte de conversation
+                            pdf_info = {
+                                'name': uploaded_file.name,
+                                'path': pdf_path,
+                                'text': pdf_text,
+                                'pages': pdf_pages,
+                                'word_count': word_count,
+                                'chunks': len(chunks),
+                                'uploaded_at': os.path.getmtime(pdf_path)  # Timestamp pour tracking
+                            }
+                            st.session_state.chat_uploaded_pdfs.append(pdf_info)
+                            
+                            # Marquer que nous avons un contexte PDF actif
+                            st.session_state.has_pdf_context = True
+                            
+                            # 🧠 AUTO-APPRENTISSAGE: Apprendre du PDF
+                            if AUTO_LEARNING_AVAILABLE and st.session_state.get('auto_learning'):
+                                with st.spinner("🧠 Apprentissage du contenu..."):
+                                    if st.session_state.auto_learning.learn_from_pdf(pdf_info):
+                                        st.success("✅ Connaissances intégrées au système d'apprentissage!")
+                            
+                            # 5. Message de succès avec panneau d'outils
+                            tools_panel_html = f'''
 <div style="
     background: linear-gradient(135deg, rgba(0, 255, 136, 0.1), rgba(0, 136, 255, 0.1));
     border: 2px solid rgba(0, 255, 136, 0.3);
@@ -5105,7 +5345,7 @@ def main():
         <span style="font-size: 2rem; margin-right: 1rem;">📄</span>
         <div>
             <h3 style="color: #00ff88; margin: 0; font-size: 1.3rem;">PDF Chargé avec Succès !</h3>
-            <p style="color: #b0b0b0; margin: 0.3rem 0 0 0; font-size: 0.9rem;">{pdf_file.name}</p>
+            <p style="color: #b0b0b0; margin: 0.3rem 0 0 0; font-size: 0.9rem;">{uploaded_file.name}</p>
         </div>
     </div>
     
@@ -5213,21 +5453,210 @@ def main():
 </div>
 '''
                         
-                        # Ajouter le panneau d'outils au chat
-                        st.session_state.chat_history.append({
-                            "role": "assistant",
-                            "content": tools_panel_html,
-                            "is_html": True
-                        })
-                        
-                    except Exception as e:
-                        error_msg = f"❌ Erreur lors du traitement du PDF: {str(e)}"
-                        st.session_state.chat_history.append({
-                            "role": "assistant",
-                            "content": error_msg
-                        })
-                        import traceback
-                        st.error(traceback.format_exc())
+                            # Ajouter le panneau d'outils au chat
+                            st.session_state.chat_history.append({
+                                "role": "assistant",
+                                "content": tools_panel_html,
+                                "is_html": True
+                            })
+                            
+                        except Exception as e:
+                            import traceback
+                            error_msg = f"❌ Erreur lors du traitement du PDF: {str(e)}"
+                            st.session_state.chat_history.append({
+                                "role": "assistant",
+                                "content": error_msg
+                            })
+                            st.error(traceback.format_exc())
+                
+                # ============================================
+                # TRAITEMENT FICHIER BINAIRE (si ce n'est PAS un PDF)
+                # ============================================
+                elif BINARY_HANDLER_AVAILABLE:
+                    # Message utilisateur
+                    st.session_state.chat_history.append({
+                        "role": "user",
+                        "content": f"🔬 Fichier uploadé: {uploaded_file.name}"
+                    })
+                    
+                    with st.spinner(f"🔬 Analyse du fichier {uploaded_file.name}..."):
+                        try:
+                            # 🆕 DÉTECTION AUTOMATIQUE DE STRUCTURE
+                            structure_detected = None
+                            extracted_df = None
+                            
+                            if BINARY_DETECTOR_AVAILABLE:
+                                try:
+                                    # Sauver temporairement pour analyse
+                                    import tempfile
+                                    with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp:
+                                        tmp.write(file_data)
+                                        tmp_path = tmp.name
+                                    
+                                    # Détecter structure
+                                    structure_detected, extracted_df = detect_and_analyze_file(tmp_path)
+                                    
+                                    # Nettoyer
+                                    import os
+                                    os.unlink(tmp_path)
+                                    
+                                    st.success(f"✅ Structure détectée: {structure_detected.file_type.value} (confiance: {structure_detected.confidence:.0%})")
+                                    
+                                except Exception as e:
+                                    st.warning(f"⚠️ Détection structure: {e}")
+                            
+                            # Analyser avec le gestionnaire de fichiers binaires
+                            result = BinaryFileHandler.process_file(uploaded_file)
+                            file_info = result['info']
+                            viewer = result['viewer']
+                            
+                            # Générer l'analyse complète
+                            analysis_report = analyze_binary_file(file_data, uploaded_file.name)
+                            
+                            # Créer le visualiseur hex
+                            hex_view = viewer.hex_dump(start=0, length=512)
+                            
+                            # Extraire les chaînes de texte
+                            text_strings = viewer.extract_text_strings(min_length=4)
+                            
+                            # Interprétation de l'entropie
+                            entropy = file_info['analysis']['entropy']
+                            if entropy < 3:
+                                entropy_desc = "Données très répétitives/structurées"
+                                entropy_color = "#00ff88"
+                            elif entropy < 6:
+                                entropy_desc = "Données texte/structurées"
+                                entropy_color = "#0088ff"
+                            elif entropy < 7.5:
+                                entropy_desc = "Données binaires normales"
+                                entropy_color = "#ffd700"
+                            else:
+                                entropy_desc = "Données compressées/chiffrées"
+                                entropy_color = "#ff69b4"
+                            
+                            # Escape HTML dans les chaînes de texte
+                            safe_text_strings = [s.replace('<', '&lt;').replace('>', '&gt;').replace('&', '&amp;') for s in text_strings]
+                            
+                            # 🆕 AFFICHAGE AVEC COMPOSANTS STREAMLIT NATIFS
+                            st.markdown(f"## 🔬 Analyse Complète: {uploaded_file.name}")
+                            
+                            # Structure détectée (si disponible)
+                            if structure_detected:
+                                with st.expander("🔍 Structure Détectée", expanded=True):
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.metric("📋 Type", structure_detected.file_type.value)
+                                        st.metric("✅ Confiance", f"{structure_detected.confidence:.0%}")
+                                    with col2:
+                                        st.metric("🔤 Encodage", structure_detected.encoding)
+                                        if structure_detected.row_count > 0:
+                                            st.metric("📏 Lignes", structure_detected.row_count)
+                                    
+                                    if structure_detected.columns:
+                                        st.write(f"**📊 Colonnes:** {', '.join(structure_detected.columns[:5])}" + (" ..." if len(structure_detected.columns) > 5 else ""))
+                                    if structure_detected.delimiter:
+                                        st.write(f"**🔹 Délimiteur:** `{repr(structure_detected.delimiter)}`")
+                            
+                            # Informations générales
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("📊 Taille", file_info['analysis']['size_formatted'])
+                            with col2:
+                                st.metric("🔢 Type", file_info['format_name'])
+                            with col3:
+                                st.metric("📈 Entropie", f"{entropy:.2f}/8.0")
+                            
+                            st.info(f"💡 {entropy_desc}")
+                            
+                            # Visualiseur hex
+                            with st.expander("🔍 Visualiseur Hexadécimal (512 premiers bytes)"):
+                                st.code(hex_view, language=None)
+                            
+                            # Statistiques
+                            with st.expander("📊 Statistiques Détaillées"):
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write(f"**Moyenne:** {file_info['analysis']['statistics'].get('mean', 0):.2f}")
+                                    st.write(f"**Médiane:** {file_info['analysis']['statistics'].get('median', 0):.2f}")
+                                    st.write(f"**Écart-type:** {file_info['analysis']['statistics'].get('std', 0):.2f}")
+                                with col2:
+                                    st.write(f"**Min/Max:** {file_info['analysis']['statistics'].get('min', 0)} / {file_info['analysis']['statistics'].get('max', 0)}")
+                                    st.write(f"**Bytes uniques:** {file_info['analysis']['statistics'].get('unique_bytes', 0)} / 256")
+                            
+                            # Chaînes de texte
+                            with st.expander(f"📝 Chaînes de Texte Extraites ({len(text_strings)} trouvées)"):
+                                for i, s in enumerate(text_strings[:30], 1):
+                                    st.text(f"{i}. {s}")
+                                if len(text_strings) > 30:
+                                    st.info(f"... et {len(text_strings) - 30} autres chaînes")
+                            
+                            # Actions disponibles
+                            st.markdown("### 🛠️ Actions Disponibles")
+                            
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.success("**💬 1. Analyse IA Complète**\n\nDemandez: 'Analyse ce fichier'")
+                            with col2:
+                                st.info("**🔍 2. Exploration Hexadécimale**\n\nDemandez: 'Montre offset 0x1000'")
+                            with col3:
+                                st.warning("**📊 3. Extraction de Données**\n\nDemandez: 'Convertis en numpy'")
+                            
+                            # Stocker les infos pour utilisation ultérieure avec le contexte d'analyse
+                            if 'binary_files' not in st.session_state:
+                                st.session_state.binary_files = []
+                            
+                            # Stocker également le contexte d'analyse complet pour éviter les réanalyses
+                            binary_info_complete = {
+                                'name': uploaded_file.name,
+                                'data': file_data,
+                                'info': file_info,
+                                'viewer': viewer,
+                                'text_strings': text_strings,
+                                'analysis_report': analysis_report,  # Sauvegarder l'analyse
+                                'hex_view': hex_view,
+                                'entropy': entropy,
+                                'entropy_desc': entropy_desc,
+                                'structure': structure_detected,  # 🆕 Structure détectée
+                                'dataframe': extracted_df  # 🆕 DataFrame extrait
+                            }
+                            st.session_state.binary_files.append(binary_info_complete)
+                            
+                            # 📊 Afficher le DataFrame si disponible
+                            if extracted_df is not None and not extracted_df.empty:
+                                st.markdown("### 📊 Données Extraites et Structurées")
+                                st.dataframe(extracted_df.head(50), use_container_width=True)
+                                
+                                # Statistiques sur le DataFrame
+                                st.markdown(f"""
+                                <div style="background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%); 
+                                            padding: 1rem; border-radius: 10px; margin: 1rem 0;
+                                            border-left: 4px solid #4caf50;">
+                                    <p style="color: #1b5e20; margin: 0.3rem 0;">
+                                        <strong>📏 Dimensions:</strong> {extracted_df.shape[0]} lignes × {extracted_df.shape[1]} colonnes
+                                    </p>
+                                    <p style="color: #1b5e20; margin: 0.3rem 0;">
+                                        <strong>🔢 Colonnes numériques:</strong> {len(extracted_df.select_dtypes(include=['int64', 'float64', 'int32', 'float32']).columns)}
+                                    </p>
+                                    <p style="color: #1b5e20; margin: 0.3rem 0;">
+                                        <strong>📝 Colonnes texte:</strong> {len(extracted_df.select_dtypes(include=['object']).columns)}
+                                    </p>
+                                </div>
+                                """, unsafe_allow_html=True)
+                            
+                            # 🧠 AUTO-APPRENTISSAGE: Apprendre du fichier binaire
+                            if AUTO_LEARNING_AVAILABLE and st.session_state.get('auto_learning'):
+                                with st.spinner("🧠 Apprentissage du fichier binaire..."):
+                                    if st.session_state.auto_learning.learn_from_binary(binary_info_complete):
+                                        st.success("✅ Analyse binaire intégrée au système!")
+                            
+                        except Exception as e:
+                            error_msg = f"❌ Erreur lors de l'analyse du fichier: {str(e)}"
+                            st.session_state.chat_history.append({
+                                "role": "assistant",
+                                "content": error_msg
+                            })
+                            import traceback
+                            st.error(traceback.format_exc())
         
         # Analyse des images avec Vision AI (s'affiche dans le chat)
         if uploaded_images:
@@ -5605,6 +6034,37 @@ Réponds en 3-5 phrases ULTRA-DÉTAILLÉES incluant: type d'image, couleurs pré
         
         # Zone de chat avec design amélioré - CARTE SCINTILLANTE
         st.markdown('<div class="kibali-chat-card">', unsafe_allow_html=True)
+        
+        # Indicateur de contexte actif
+        context_indicators = []
+        if 'binary_files' in st.session_state and st.session_state.binary_files:
+            context_indicators.append(f"🔬 Fichier binaire: {st.session_state.binary_files[-1]['name']}")
+        if st.session_state.has_pdf_context:
+            context_indicators.append(f"📄 {len(st.session_state.chat_uploaded_pdfs)} PDF(s)")
+        if st.session_state.media_analysis_results:
+            context_indicators.append(f"📸 {len(st.session_state.media_analysis_results)} média(s)")
+        
+        if context_indicators:
+            st.markdown(f"""
+            <div style='
+                background: linear-gradient(135deg, rgba(0, 136, 255, 0.15), rgba(138, 43, 226, 0.15));
+                padding: 0.8rem 1.2rem;
+                border-radius: 8px;
+                border-left: 4px solid #0088ff;
+                margin-bottom: 1rem;
+                display: flex;
+                align-items: center;
+                gap: 1rem;
+            '>
+                <span style='color: #0088ff; font-size: 1.2rem;'>💬</span>
+                <div>
+                    <strong style='color: #0088ff;'>Mode Conversationnel Actif</strong>
+                    <br>
+                    <span style='color: #b0b0b0; font-size: 0.9rem;'>{' • '.join(context_indicators)}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
         chat_container = st.container()
         
         with chat_container:
@@ -5640,13 +6100,19 @@ Réponds en 3-5 phrases ULTRA-DÉTAILLÉES incluant: type d'image, couleurs pré
                     # Affichage spécial pour les médias web
                     st.markdown(message["content"], unsafe_allow_html=True)
                 else:
-                    # Vérifier si c'est du HTML pur (panneau d'outils PDF)
-                    if message.get("is_html", False):
-                        st.markdown(message["content"], unsafe_allow_html=True)
+                    # Vérifier si c'est du HTML pur (panneau d'outils PDF ou contient <div)
+                    content = message.get("content", "")
+                    is_html_flag = message.get("is_html", False)
+                    has_div_tags = ("<div" in content and "</div>" in content)
+                    has_style_attr = "style=" in content
+                    
+                    # Si c'est du HTML (flag OU contient div OU contient style), le rendre directement
+                    if is_html_flag or has_div_tags or has_style_attr:
+                        st.markdown(content, unsafe_allow_html=True)
                         continue  # Skip le reste du formatage
                     
                     # Formater la réponse avec Markdown pour structure
-                    formatted_response = message["content"]
+                    formatted_response = content
                     
                     # Carte complète en un seul bloc avec contenu markdown
                     st.markdown(f'''
@@ -5779,8 +6245,31 @@ Réponds en 3-5 phrases ULTRA-DÉTAILLÉES incluant: type d'image, couleurs pré
 ''', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Input de chat stylisé
+        # Ancre pour auto-scroll vers le bas
+        st.markdown('<div id="chat-bottom"></div>', unsafe_allow_html=True)
+        
+        # Script JavaScript pour auto-scroll
+        st.markdown("""
+        <script>
+        // Auto-scroll vers le bas quand nouveaux messages
+        const chatBottom = document.getElementById('chat-bottom');
+        if (chatBottom) {
+            chatBottom.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+        
+        // Garder le focus sur l'input
+        const chatInput = document.querySelector('[data-testid="stChatInput"] input');
+        if (chatInput) {
+            chatInput.focus();
+        }
+        </script>
+        """, unsafe_allow_html=True)
+        
+        # Input de chat stylisé - TOUJOURS EN BAS
         if prompt := st.chat_input("💭 Pose ta question ici...", key="chat_input"):
+            # Initialiser la variable response
+            response = ""
+            
             # Enrichir le prompt avec le contexte des conversations passées (mémoire vectorielle)
             enriched_prompt = prompt
             conversation_context = ""
@@ -5796,6 +6285,18 @@ Réponds en 3-5 phrases ULTRA-DÉTAILLÉES incluant: type d'image, couleurs pré
 QUESTION ACTUELLE: {prompt}"""
             except Exception as e:
                 print(f"⚠️ Erreur récupération contexte mémoire: {e}")
+            
+            # 🤖 ENRICHIR avec le contexte des Nano-IA spécialisées
+            nano_ai_context = ""
+            if AUTO_LEARNING_AVAILABLE and st.session_state.get('auto_learning'):
+                try:
+                    nano_ai_context = st.session_state.auto_learning.get_domain_context(prompt, k=3)
+                    if nano_ai_context:
+                        enriched_prompt = f"""{enriched_prompt}
+
+{nano_ai_context}"""
+                except Exception as e:
+                    print(f"⚠️ Erreur contexte nano-IA: {e}")
             
             # Enrichir le prompt avec les résultats d'analyse de médias IA si disponibles
             if st.session_state.media_analysis_results:
@@ -5848,40 +6349,1340 @@ QUESTION UTILISATEUR: {prompt}"""
                 else:
                     enriched_prompt = media_full_context
             
+            # 🎯 DÉTECTION AUTOMATIQUE DES INTENTIONS ET ORCHESTRATION (AVANT TOUT)
+            question_lower = prompt.lower()
+            needs_calculation = any(kw in question_lower for kw in ['calcul', 'moyenne', 'somme', 'total', 'combien', 'valeur', 'profondeur', 'exact'])
+            needs_web_research = any(kw in question_lower for kw in ['domaine', 'activité', 'industrie', 'application', 'utilisation', 'pourquoi', 'comment'])
+            needs_data_extraction = any(kw in question_lower for kw in ['données', 'valeurs', 'liste', 'extrait', 'montre', 'affiche', 'trouve'])
+            needs_conversion = any(kw in question_lower for kw in ['convertis', 'convert', 'numpy', 'tableau', 'dataframe', 'pandas', 'csv', 'json', 'extraction'])
+            needs_ert_analysis = any(kw in question_lower for kw in ['ert', 'résistivité', 'resistivité', 'géophysique', 'forage', 'nappe', 'aquifère', 'eau souterraine'])
+            
+            # ═══════════════════════════════════════════════════════════════════
+            # FICHIER BINAIRE - CONTEXTE ABSOLU ET EXCLUSIF (AVEC CACHE)
+            # ═══════════════════════════════════════════════════════════════════
+            if 'binary_files' in st.session_state and st.session_state.binary_files:
+                # RÉCUPÉRER LE DERNIER FICHIER UPLOADÉ (le plus récent)
+                binary = st.session_state.binary_files[-1]
+                
+                # CACHE: Vérifier si le contexte a déjà été généré pour éviter les réanalyses
+                if 'cached_binary_context' not in binary:
+                    # Première fois : construire et cacher le contexte
+                    binary_context = ""
+                    
+                    binary_context += f"\n{'='*80}\n"
+                    binary_context += f"📁 FICHIER BINAIRE EN TÊTE DE CONVERSATION: {binary['name']}\n"
+                    binary_context += f"{'='*80}\n\n"
+                    
+                    # Informations essentielles TRÈS DÉTAILLÉES
+                    binary_context += f"🔢 TYPE DÉTECTÉ: {binary['info']['format_name']}\n"
+                    binary_context += f"📊 TAILLE EXACTE: {binary['info']['analysis']['size_formatted']} ({len(binary['data'])} bytes)\n"
+                    binary_context += f"🎯 MAGIC BYTES: {binary['info']['magic_bytes']}\n"
+                    binary_context += f"📈 ENTROPIE: {binary['info']['analysis']['entropy']:.2f}/8.0 "
+                    
+                    # Interprétation de l'entropie
+                    entropy = binary['info']['analysis']['entropy']
+                    if entropy < 3:
+                        binary_context += "(Données très répétitives/structurées - probablement du texte ou données simples)\n"
+                    elif entropy < 6:
+                        binary_context += "(Données texte/structurées - contient probablement des métadonnées)\n"
+                    elif entropy < 7.5:
+                        binary_context += "(Données binaires normales - fichier standard)\n"
+                    else:
+                        binary_context += "(Données compressées/chiffrées - haute complexité)\n"
+                    
+                    # Statistiques détaillées
+                    stats = binary['info']['analysis']['statistics']
+                    binary_context += f"\n📊 STATISTIQUES DES BYTES:\n"
+                    binary_context += f"   • Valeur moyenne: {stats.get('mean', 0):.2f}\n"
+                    binary_context += f"   • Médiane: {stats.get('median', 0):.2f}\n"
+                    binary_context += f"   • Écart-type: {stats.get('std', 0):.2f}\n"
+                    binary_context += f"   • Plage: {stats.get('min', 0)} à {stats.get('max', 0)}\n"
+                    binary_context += f"   • Bytes uniques: {stats.get('unique_bytes', 0)}/256\n"
+                    
+                    # Patterns détectés
+                    if binary['info']['analysis']['patterns']:
+                        binary_context += f"\n🎯 PATTERNS DÉTECTÉS:\n"
+                        for pattern in binary['info']['analysis']['patterns']:
+                            binary_context += f"   ✓ {pattern}\n"
+                    
+                    # Chaînes de texte extraites - TRÈS IMPORTANT pour l'analyse
+                    if binary['text_strings']:
+                        binary_context += f"\n📝 CHAÎNES DE TEXTE EXTRAITES ({len(binary['text_strings'])} au total):\n"
+                        # Afficher jusqu'à 30 chaînes pour plus de contexte
+                        for i, s in enumerate(binary['text_strings'][:30], 1):
+                            binary_context += f"   {i}. \"{s[:100]}\"\n"
+                        if len(binary['text_strings']) > 30:
+                            binary_context += f"   ... et {len(binary['text_strings'])-30} autres chaînes\n"
+                    else:
+                        binary_context += f"\n📝 CHAÎNES DE TEXTE: Aucune chaîne ASCII lisible détectée\n"
+                    
+                    # Header hexadécimal (256 premiers bytes pour plus de contexte)
+                    binary_context += f"\n🔍 HEADER HEXADÉCIMAL (256 premiers bytes):\n"
+                    hex_header = binary['data'][:256].hex()
+                    # Formater en lignes de 32 caractères hex (16 bytes par ligne)
+                    for i in range(0, len(hex_header), 32):
+                        offset = i // 2
+                        hex_line = hex_header[i:i+32]
+                        # Ajouter des espaces tous les 2 caractères
+                        hex_formatted = ' '.join(hex_line[j:j+2] for j in range(0, len(hex_line), 2))
+                        # ASCII representation
+                        ascii_chars = ''.join(
+                            chr(binary['data'][offset + k]) if 32 <= binary['data'][offset + k] < 127 else '.'
+                            for k in range(min(16, len(binary['data']) - offset))
+                        )
+                        binary_context += f"   {offset:04X}: {hex_formatted:<48} | {ascii_chars}\n"
+                    
+                    # Structure du header si détectée
+                    header_info = binary['info']['analysis']['header']
+                    if header_info.get('is_text_like'):
+                        binary_context += f"\n✓ Le header semble contenir du texte ASCII ({header_info.get('ascii_ratio', 0):.1%})\n"
+                        if header_info.get('first_line'):
+                            binary_context += f"   Première ligne: \"{header_info['first_line']}\"\n"
+                    
+                    # CACHER le contexte pour réutilisation
+                    binary['cached_binary_context'] = binary_context
+                else:
+                    # Réutiliser le contexte caché - évite les réanalyses
+                    binary_context = binary['cached_binary_context']
+                
+                # ⚡ NOUVEAU: Contexte conversationnel intelligent avec OUTILS PROACTIFS
+                # Pour la première question (upload), donner analyse complète
+                # Pour les suivantes, mode expert avec utilisation d'outils
+                is_first_query = len(st.session_state.chat_history) <= 3
+                
+                # 🌊 ANALYSE ERT AUTOMATIQUE - FICHIERS .dat GÉOPHYSIQUES
+                # Vérifier s'il y a un fichier .dat uploadé (via uploader dédié OU binary_files)
+                dat_file_source = None
+                if 'uploaded_dat_file' in st.session_state and st.session_state.uploaded_dat_file:
+                    # Fichier .dat uploadé via l'uploader dédié
+                    dat_file_source = {
+                        'name': st.session_state.uploaded_dat_file['name'],
+                        'path': st.session_state.uploaded_dat_file['path'],
+                        'data': open(st.session_state.uploaded_dat_file['path'], 'rb').read()
+                    }
+                elif 'binary_files' in st.session_state and st.session_state.binary_files:
+                    # Fichier .dat uploadé via l'uploader générique
+                    binary = st.session_state.binary_files[-1]
+                    if binary['name'].lower().endswith('.dat'):
+                        dat_file_source = binary
+                
+                if needs_ert_analysis and dat_file_source:
+                        with st.expander("📋 Plan d'Action ERT - Analyse Géophysique", expanded=True):
+                            st.markdown(f"""
+                            ### 🌊 Orchestration ERT Activée
+                            
+                            **Fichier:** `{dat_file_source['name']}`
+                            
+                            **Formats supportés (détection automatique):**
+                            
+                            **Format 1 - Standard (espaces):**
+                            ```
+                            survey_point  depth  data  project
+                            1.0  -2.5  0.35  projet1
+                            1.0  -5.0  0.38  projet1
+                            ```
+                            
+                            **Format 2 - Fréquences (CSV):**
+                            ```
+                            Projet,Point,621105.0MHz,155276.25MHz,...
+                            Archange,1,0.119,0.122,0.116,...
+                            Archange,2,0.161,0.163,0.164,...
+                            ```
+                            
+                            **Plan d'exécution:**
+                            1. ✅ **Parse du fichier .dat** - Détection automatique du format
+                            2. ⏳ **Analyse des résistivités** - Classification géologique
+                            3. ⏳ **Interprétation hydrogéologique** - Types d'eau identifiés
+                            4. ⏳ **Pseudo-section 2D** - Visualisation avec colormap eau
+                            5. ⏳ **Zones cibles** - Identification aquifères
+                            6. ⏳ **Export rapport** - PDF complet avec statistiques
+                            """)
+                        
+                        try:
+                            import pandas as pd
+                            import numpy as np
+                            import matplotlib.pyplot as plt
+                            from kibali_data.models.ert_analyzer import ERTAnalyzer
+                            
+                            st.info(f"🔄 Analyse ERT en cours de `{dat_file_source['name']}`...")
+                            
+                            # Créer l'analyseur
+                            ert = ERTAnalyzer()
+                            
+                            # Analyse complète
+                            with st.spinner("📊 Analyse des données ERT..."):
+                                result = ert.analyze_file(dat_file_source['data'])
+                            
+                            if result.get('error'):
+                                st.error(f"❌ Erreur d'analyse: {result['error']}")
+                                
+                                # Afficher un aperçu du fichier pour diagnostic
+                                with st.expander("🔍 Aperçu du fichier pour diagnostic"):
+                                    try:
+                                        content_preview = dat_file_source['data'][:2000].decode('utf-8', errors='replace')
+                                        st.code(content_preview, language=None)
+                                        
+                                        # Analyse basique du contenu
+                                        lines = [l.strip() for l in content_preview.split('\n') if l.strip()]
+                                        if lines:
+                                            first_line = lines[0]
+                                            st.write(f"**Première ligne:** `{first_line}`")
+                                            parts = first_line.split()
+                                            st.write(f"**Nombre de colonnes:** {len(parts)}")
+                                            st.write(f"**Colonnes:** `{parts}`")
+                                    except:
+                                        st.write("Impossible d'afficher l'aperçu")
+                                
+                                # Message d'aide pour le format
+                                st.info("""
+                                **💡 Formats .dat supportés (ERTest.py):**
+                                
+                                **Format 1 - Standard (4 colonnes, espaces):**
+                                ```
+                                survey_point  depth  resistivity  project
+                                1.0  -2.5  0.35  projet1
+                                1.0  -5.0  0.38  projet1
+                                2.0  -2.5  0.42  projet1
+                                ```
+                                
+                                **Format 2 - Fréquences (CSV avec virgules):**
+                                ```
+                                Projet,Point Sondage,621105.0MHz,155276.25MHz,...
+                                Projet Archange Ondimba 2,1,0.119,0.122,0.116,...
+                                Projet Archange Ondimba 2,2,0.161,0.163,0.164,...
+                                ```
+                                
+                                **Notes:**
+                                - Détection automatique du séparateur (espaces vs virgules)
+                                - Les profondeurs négatives sont converties en positives
+                                - Les lignes commençant par # sont ignorées (commentaires)
+                                - Pour CSV: première ligne = en-têtes avec fréquences MHz
+                                
+                                **Vérifications:**
+                                - ✅ Pas de lignes vides au début
+                                - ✅ Les colonnes sont séparées par espaces ou tabs
+                                - ✅ Les valeurs numériques utilisent des points (pas de virgules)
+                                - ✅ Les profondeurs sont en mètres
+                                - ✅ Les résistivités sont en Ω·m
+                                """)
+                                return
+                            
+                            # 🧠 ENRICHISSEMENT RAG AUTOMATIQUE
+                            st.info("🧠 Enrichissement avec la base de connaissances RAG...")
+                            rag_insights = ""
+                            rag_context = ""
+                            
+                            try:
+                                if st.session_state.get('vectordb') is not None:
+                                    # Construire une requête enrichie pour le RAG
+                                    stats = result['stats']
+                                    water_zones = result['water_zones']
+                                    
+                                    # Identifier le contexte dominant
+                                    dominant_water_type = max(water_zones, key=water_zones.get)
+                                    avg_resistivity = stats['resistivity_stats']['mean']
+                                    
+                                    # Créer une requête intelligente pour le RAG
+                                    rag_query = f"""Résistivité électrique {avg_resistivity:.1f} Ohm·m {dominant_water_type} 
+                                    géophysique ERT aquifère forage hydrogéologie nappe phréatique 
+                                    eau souterraine prospection classification lithologie"""
+                                    
+                                    # Recherche dans la base vectorielle
+                                    with st.spinner("🔍 Recherche de connaissances pertinentes..."):
+                                        docs = st.session_state.vectordb.similarity_search(rag_query, k=5)
+                                        
+                                        if docs:
+                                            st.success(f"✅ {len(docs)} documents pertinents trouvés dans la base de connaissances")
+                                            
+                                            # Extraire le contexte
+                                            rag_context = "\n\n".join([
+                                                f"📄 **Document {i+1}:** {doc.page_content[:300]}..." 
+                                                for i, doc in enumerate(docs)
+                                            ])
+                                            
+                                            # Générer des insights avec l'IA en utilisant le RAG
+                                            try:
+                                                client = create_client()
+                                                
+                                                rag_prompt = f"""Tu es un expert en géophysique et hydrogéologie. Analyse ces données ERT:
+
+**DONNEES MESUREES:**
+- Résistivité moyenne: {avg_resistivity:.2f} Ω·m
+- Type d'eau dominant: {dominant_water_type}
+- Profondeur: {stats['depth_range'][0]:.1f} - {stats['depth_range'][1]:.1f} m
+- Points de sondage: {stats['survey_points']}
+- Distribution eau: mer={water_zones['mer']}, salée={water_zones['salée']}, douce={water_zones['douce']}, pure={water_zones['pure']}
+
+**CONTEXTE DE LA BASE DE CONNAISSANCES:**
+{rag_context[:2000]}
+
+**TACHE:**
+En te basant sur les documents de la base de connaissances ET ton expertise, fournis:
+1. Une interprétation géologique détaillée
+2. Les implications hydrogéologiques
+3. Des recommandations pour le forage
+4. Les risques potentiels identifiés
+5. Comparaison avec des sites similaires si mentionnés dans les documents
+
+Sois précis, technique et référence les documents quand pertinent."""
+
+                                                rag_response = client.chat.completions.create(
+                                                    model=WORKING_MODELS[model_choice],
+                                                    messages=[{"role": "user", "content": rag_prompt}],
+                                                    max_tokens=2000,
+                                                    temperature=0.3
+                                                )
+                                                
+                                                rag_insights = rag_response.choices[0].message.content
+                                                
+                                                # 🧹 NETTOYER LA RÉPONSE DES CARACTÈRES CHINOIS/NON-LATINS
+                                                rag_insights = clean_response_text(rag_insights)
+                                                
+                                                # Afficher les insights enrichis
+                                                with st.expander("🧠 Analyse Enrichie par IA + Base de Connaissances", expanded=True):
+                                                    st.markdown(rag_insights)
+                                                    
+                                                    st.markdown("---")
+                                                    st.markdown("**📚 Sources utilisées:**")
+                                                    for i, doc in enumerate(docs[:3]):
+                                                        with st.expander(f"Document {i+1}"):
+                                                            st.text(doc.page_content[:500])
+                                            
+                                            except Exception as e:
+                                                st.warning(f"⚠️ Impossible de générer l'analyse enrichie: {e}")
+                                        else:
+                                            st.info("ℹ️ Aucun document pertinent trouvé dans la base de connaissances")
+                                else:
+                                    st.info("ℹ️ Base de connaissances RAG non disponible - analyse standard uniquement")
+                            
+                            except Exception as e:
+                                st.warning(f"⚠️ Enrichissement RAG échoué: {e}")
+                            
+                            st.success("✅ Analyse ERT terminée!")
+                            
+                            # Afficher un aperçu du fichier pour diagnostic
+                            with st.expander("🔍 Aperçu du fichier pour diagnostic"):
+                                try:
+                                    content_preview = dat_file_source['data'][:2000].decode('utf-8', errors='replace')
+                                    st.code(content_preview, language=None)
+                                    
+                                    # Analyse basique du contenu
+                                    lines = [l.strip() for l in content_preview.split('\n') if l.strip()]
+                                    if lines:
+                                        first_line = lines[0]
+                                        st.write(f"**Première ligne:** `{first_line}`")
+                                        parts = first_line.split()
+                                        st.write(f"**Nombre de colonnes:** {len(parts)}")
+                                        st.write(f"**Colonnes:** `{parts}`")
+                                except:
+                                    st.write("Impossible d'afficher l'aperçu")
+                            
+                            # Message d'aide pour le format
+                            st.info("""
+                            **💡 Formats .dat supportés (ERTest.py):**
+                            
+                            **Format 1 - Standard (4 colonnes, espaces):**
+                            ```
+                            survey_point  depth  resistivity  project
+                            1.0  -2.5  0.35  projet1
+                            1.0  -5.0  0.38  projet1
+                            2.0  -2.5  0.42  projet1
+                            ```
+                            
+                            **Format 2 - Fréquences (CSV avec virgules):**
+                            ```
+                            Projet,Point Sondage,621105.0MHz,155276.25MHz,...
+                            Projet Archange Ondimba 2,1,0.119,0.122,0.116,...
+                            Projet Archange Ondimba 2,2,0.161,0.163,0.164,...
+                            ```
+                            
+                            **Notes:**
+                            - Détection automatique du séparateur (espaces vs virgules)
+                            - Les profondeurs négatives sont converties en positives
+                            - Les lignes commençant par # sont ignorées (commentaires)
+                            - Pour CSV: première ligne = en-têtes avec fréquences MHz
+                            
+                            **Vérifications:**
+                            - ✅ Pas de lignes vides au début
+                            - ✅ Les colonnes sont séparées par espaces ou tabs
+                            - ✅ Les valeurs numériques utilisent des points (pas de virgules)
+                            - ✅ Les profondeurs sont en mètres
+                            - ✅ Les résistivités sont en Ω·m
+                            """)
+                            
+                            # Affichage des résultats
+                            st.markdown("## 📊 Résultats de l'Analyse ERT")
+                            
+                            # Statistiques générales
+                            stats = result['stats']
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("📏 Mesures", stats['total_measurements'])
+                            with col2:
+                                st.metric("📍 Points", stats['survey_points'])
+                            with col3:
+                                st.metric("🔢 Résistivité moy.", f"{stats['resistivity_stats']['mean']:.2f} Ω·m")
+                            with col4:
+                                depth_min, depth_max = stats['depth_range']
+                                st.metric("📏 Profondeur", f"{depth_min:.1f} - {depth_max:.1f} m")
+                            
+                            # Zones d'eau identifiées
+                            st.markdown("### 💧 Types d'Eau Identifiés")
+                            water_zones = result['water_zones']
+                            
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("🔴 Eau de mer", water_zones['mer'], 
+                                         help="0.1-1 Ω·m: Eau hypersalée")
+                            with col2:
+                                st.metric("🟡 Eau salée", water_zones['salée'],
+                                         help="1-10 Ω·m: Eau saumâtre")
+                            with col3:
+                                st.metric("🟢 Eau douce", water_zones['douce'],
+                                         help="10-100 Ω·m: Eau potable")
+                            with col4:
+                                st.metric("🔵 Eau pure", water_zones['pure'],
+                                         help="> 100 Ω·m: Eau très pure")
+                            
+                            # Interprétations géologiques
+                            st.markdown("### 🪨 Interprétations Géologiques")
+                            interp_summary = result['interpretations']
+                            
+                            if interp_summary:
+                                df_interp = pd.DataFrame([
+                                    {'Matériau': material, 'Occurrences': count}
+                                    for material, count in sorted(interp_summary.items(), 
+                                                                 key=lambda x: x[1], reverse=True)
+                                ])
+                                st.dataframe(df_interp, use_container_width=True)
+                            
+                            # Zones cibles pour forage
+                            target_zones = result['target_zones']
+                            if target_zones:
+                                st.markdown("### 🎯 Zones Cibles pour Forage")
+                                st.success(f"✅ **{len(target_zones)} zones cibles identifiées** (50-300 Ω·m)")
+                                
+                                df_targets = pd.DataFrame(target_zones)
+                                st.dataframe(df_targets, use_container_width=True)
+                                
+                                st.info("""
+                                **Recommandations:**
+                                - 🟢 50-100 Ω·m: Aquifère sableux - ZONE PRIORITAIRE
+                                - ⭐ 100-300 Ω·m: Gravier/Sable grossier - EXCELLENT débit
+                                """)
+                            else:
+                                st.warning("⚠️ Aucune zone cible optimale détectée (50-300 Ω·m)")
+                            
+                            # Pseudo-section 2D
+                            st.markdown("### 🗺️ Pseudo-section 2D")
+                            with st.spinner("Création de la pseudo-section..."):
+                                fig = ert.create_2d_pseudosection()
+                                if fig:
+                                    st.pyplot(fig)
+                                    plt.close(fig)
+                            
+                            # Tableau d'interprétation
+                            with st.expander("📋 Tableau d'Interprétation Complet"):
+                                st.markdown(ert.create_interpretation_html(), unsafe_allow_html=True)
+                            
+                            # DataFrame complet
+                            with st.expander("📊 Données Brutes"):
+                                st.dataframe(result['dataframe'], use_container_width=True)
+                            
+                            # 💾 STOCKER LES RÉSULTATS ERT POUR ANALYSE CONVERSATIONNELLE
+                            if 'ert_analysis' not in st.session_state:
+                                st.session_state.ert_analysis = {}
+                            
+                            st.session_state.ert_analysis[binary['name']] = {
+                                'result': result,
+                                'stats': stats,
+                                'water_zones': water_zones,
+                                'target_zones': target_zones,
+                                'interp_summary': interp_summary,
+                                'dataframe': result['dataframe'],
+                                'ert_analyzer': ert  # Garder l'instance pour réutilisation
+                            }
+                            
+                            # Réponse récapitulative ENRICHIE avec guide d'utilisation
+                            response = f"""✅ **Analyse ERT Complète Terminée!**
+
+📊 **Résultats du fichier `{binary['name']}`:**
+- 📏 **{stats['total_measurements']} mesures** sur **{stats['survey_points']} points de sondage**
+- 🌊 **Types d'eau:** {water_zones['mer']} mer, {water_zones['salée']} salée, {water_zones['douce']} douce, {water_zones['pure']} pure
+- 🎯 **{len(target_zones)} zones cibles** pour forage (résistivité optimale 50-300 Ω·m)
+- 📈 **Résistivité moyenne:** {stats['resistivity_stats']['mean']:.2f} Ω·m (min: {stats['resistivity_stats']['min']:.2f}, max: {stats['resistivity_stats']['max']:.2f})
+- 📏 **Profondeur explorée:** {depth_min:.1f} à {depth_max:.1f} m
+
+**🪨 Interprétations géologiques principales:**
+{chr(10).join([f"• {mat}: {cnt} mesures" for mat, cnt in list(interp_summary.items())[:3]])}
+
+---
+
+### 💬 **Posez-moi des questions sur cette analyse !**
+
+**Exemples de questions que vous pouvez me poser:**
+
+🎨 **Couleurs & Résistivités:**
+- "Que signifie la couleur rouge sur la carte ?"
+- "Quelle résistivité correspond au vert ?"
+- "Pourquoi y a-t-il du bleu à cette profondeur ?"
+
+📊 **Analyses détaillées:**
+- "Explique-moi les zones à 50 Ω·m"
+- "Quelle est la meilleure profondeur pour forer ?"
+- "Compare les points de sondage 1 et 3"
+
+💧 **Interprétation hydrogéologique:**
+- "Où se trouve l'eau douce ?"
+- "Pourquoi y a-t-il de l'eau de mer ici ?"
+- "Quelle est la qualité de l'aquifère ?"
+
+🎯 **Recommandations:**
+- "Où dois-je forer mon puits ?"
+- "Quelle profondeur recommandes-tu ?"
+- "Quel débit puis-je espérer ?"
+
+**🛠️ Outils utilisés:** ERTAnalyzer, Pandas, NumPy, Matplotlib, Classification automatique
+
+Je peux maintenant analyser chaque détail de ces résultats avec vous ! 🚀"""
+                            
+                            st.session_state.chat_history.append({"role": "assistant", "content": response})
+                            st.success("✅ Analyse ERT terminée! Vous pouvez maintenant me poser des questions détaillées sur les résultats.")
+                            return
+                            
+                        except Exception as e:
+                            st.error(f"❌ Erreur lors de l'analyse ERT: {e}")
+                            import traceback
+                            st.code(traceback.format_exc())
+                            return
+                
+                # 🚀 ORCHESTRATION AUTOMATIQUE - EXÉCUTER AU LIEU DE PROPOSER
+                if needs_conversion and 'binary_files' in st.session_state and st.session_state.binary_files:
+                    # Afficher le plan d'action
+                    with st.expander("📋 Plan d'Action Automatique", expanded=True):
+                        st.markdown("""
+                        ### 🎯 Orchestration Activée
+                        
+                        **Détection:** Demande de conversion de données
+                        
+                        **Plan d'exécution:**
+                        1. ✅ **Analyse du fichier** - Identifier la structure
+                        2. ✅ **Détection du format** - CSV/TSV/JSON/Binaire
+                        3. ⏳ **Extraction des données** - Parser le contenu
+                        4. ⏳ **Conversion** - Créer tableau NumPy/Pandas
+                        5. ⏳ **Visualisation** - Afficher le résultat
+                        6. ⏳ **Export** - Proposer téléchargement
+                        """)
+                    
+                    # EXÉCUTION RÉELLE DE LA CONVERSION
+                    try:
+                        import pandas as pd
+                        import numpy as np
+                        import io
+                        
+                        binary = st.session_state.binary_files[-1]
+                        st.info(f"🔄 Conversion en cours de `{binary['name']}`...")
+                        
+                        # Étape 1: Détecter le format
+                        with st.spinner("Détection du format..."):
+                            if binary.get('structure'):
+                                structure = binary['structure']
+                                st.success(f"✅ Format détecté: **{structure.file_type.value}** (confiance: {structure.confidence:.0%})")
+                                
+                                # Utiliser le DataFrame déjà extrait
+                                if binary.get('dataframe') is not None:
+                                    df = binary['dataframe']
+                                    st.success(f"✅ Données déjà extraites: {df.shape[0]} lignes × {df.shape[1]} colonnes")
+                                else:
+                                    # Extraire maintenant
+                                    text_content = '\n'.join(binary.get('text_strings', []))
+                                    delimiter = structure.delimiter or '\t'
+                                    df = pd.read_csv(io.StringIO(text_content), delimiter=delimiter, header=None, on_bad_lines='skip')
+                                    st.success(f"✅ Extraction réussie: {df.shape[0]} lignes × {df.shape[1]} colonnes")
+                            else:
+                                # Tentative brute force
+                                st.warning("⚠️ Structure non détectée, tentative d'extraction brute...")
+                                text_content = '\n'.join(binary.get('text_strings', []))
+                                for delim in ['\t', ',', ';', ' ']:
+                                    try:
+                                        df = pd.read_csv(io.StringIO(text_content), delimiter=delim, header=None, on_bad_lines='skip')
+                                        if df.shape[1] > 1 and df.shape[0] > 0:
+                                            st.success(f"✅ Format détecté: Délimiteur `{repr(delim)}` - {df.shape[0]}×{df.shape[1]}")
+                                            break
+                                    except:
+                                        continue
+                        
+                        # Étape 2: Conversion NumPy
+                        with st.spinner("Conversion en NumPy..."):
+                            numpy_array = df.to_numpy()
+                            st.success(f"✅ Tableau NumPy créé: shape={numpy_array.shape}, dtype={numpy_array.dtype}")
+                        
+                        # Étape 3: Affichage
+                        st.markdown("### 📊 Résultat de la Conversion")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("📏 Dimensions", f"{numpy_array.shape[0]} × {numpy_array.shape[1]}")
+                        with col2:
+                            st.metric("🔢 Type", str(numpy_array.dtype))
+                        with col3:
+                            st.metric("💾 Taille", f"{numpy_array.nbytes / 1024:.2f} KB")
+                        
+                        # DataFrame preview
+                        st.markdown("#### 🔍 Aperçu des Données")
+                        st.dataframe(df.head(50), use_container_width=True)
+                        
+                        # Statistiques
+                        st.markdown("#### 📈 Statistiques")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(df.describe())
+                        with col2:
+                            # Tentative de visualisation si colonnes numériques
+                            numeric_cols = df.select_dtypes(include=[np.number]).columns
+                            if len(numeric_cols) > 0:
+                                st.line_chart(df[numeric_cols].head(100))
+                        
+                        # Export
+                        st.markdown("#### 💾 Export")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            csv_data = df.to_csv(index=False).encode('utf-8')
+                            st.download_button("📥 Télécharger CSV", csv_data, f"{binary['name']}.csv", "text/csv")
+                        with col2:
+                            # NumPy save
+                            np_bytes = io.BytesIO()
+                            np.save(np_bytes, numpy_array)
+                            st.download_button("📥 Télécharger NumPy", np_bytes.getvalue(), f"{binary['name']}.npy", "application/octet-stream")
+                        with col3:
+                            json_data = df.to_json(orient='records', indent=2).encode('utf-8')
+                            st.download_button("📥 Télécharger JSON", json_data, f"{binary['name']}.json", "application/json")
+                        
+                        # Mise à jour du plan
+                        with st.expander("📋 Plan d'Action Automatique", expanded=False):
+                            st.markdown("""
+                            ### ✅ Orchestration Terminée
+                            
+                            **Toutes les étapes exécutées avec succès:**
+                            1. ✅ **Analyse du fichier** - Complétée
+                            2. ✅ **Détection du format** - Complétée
+                            3. ✅ **Extraction des données** - Complétée
+                            4. ✅ **Conversion** - NumPy/Pandas créés
+                            5. ✅ **Visualisation** - Affichée ci-dessus
+                            6. ✅ **Export** - Boutons disponibles
+                            """)
+                        
+                        # Stocker les résultats dans la session pour persistance
+                        if 'conversion_results' not in st.session_state:
+                            st.session_state.conversion_results = []
+                        
+                        st.session_state.conversion_results.append({
+                            'filename': binary['name'],
+                            'dataframe': df,
+                            'numpy_array': numpy_array,
+                            'timestamp': pd.Timestamp.now()
+                        })
+                        
+                        # Ajouter réponse récapitulative
+                        response = f"""✅ **Conversion Réussie!**
+
+Le fichier `{binary['name']}` a été automatiquement:
+- 🔍 Analysé et structuré
+- 📊 Converti en tableau NumPy de shape {numpy_array.shape}
+- 📈 Transformé en DataFrame Pandas ({df.shape[0]} lignes × {df.shape[1]} colonnes)
+- 💾 Préparé pour export (CSV, NumPy, JSON)
+
+Les données sont affichées ci-dessus avec statistiques et visualisations."""
+                        
+                        st.session_state.chat_history.append({"role": "assistant", "content": response})
+                        st.success("✅ Conversion terminée! Résultats affichés ci-dessus.")
+                        # NE PAS faire st.rerun() - garder l'affichage
+                        return  # Sortir pour ne pas continuer le traitement normal
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors de la conversion: {e}")
+                        st.exception(e)
+                        return  # Sortir en cas d'erreur
+                
+                if is_first_query:
+                    # Première analyse : réponse structurée complète avec recherche web
+                    binary_full_context = f"""
+🔬 ANALYSE EXPERTE APPROFONDIE DU FICHIER: {binary['name']}
+
+Tu es Kibali, un expert en analyse de données avec accès à des outils puissants.
+L'utilisateur demande: "{prompt}"
+
+📊 DONNÉES COMPLÈTES DU FICHIER:
+{binary_context}
+
+🛠️ OUTILS À TA DISPOSITION:
+1. **Recherche Web** - Pour contexte industriel, standards, domaines d'application
+2. **Calculs Python** - Pour analyses statistiques, moyennes, totaux
+3. **Extraction de données** - Parser et structurer les données
+4. **Visualisation** - Créer des tableaux, graphiques
+5. **Comparaison** - Benchmarking avec standards connus
+
+⚡ INSTRUCTIONS IMPÉRATIVES:
+1. **ANALYSE COMPLÈTE** (minimum 20 lignes structurées):
+   - Vue d'ensemble du fichier
+   - Identification précise du format et standard
+   - Contexte métier/industriel (utilise recherche web si besoin)
+   - Extraction des données clés avec valeurs exactes
+   - Analyse statistique (moyennes, min, max, tendances)
+   - Implications pratiques
+
+2. **UTILISE LES OUTILS ACTIVEMENT**:
+   - Si tu vois des données numériques → Calcule statistiques
+   - Si tu identifies un domaine → Recherche web pour contexte
+   - Si format connu → Compare avec standards
+   - Si valeurs présentes → Extrais et structure en tableau
+
+3. **STRUCTURE TA RÉPONSE**:
+   ```
+   🎯 Identification du fichier
+   📊 Analyse des données (avec chiffres exacts)
+   🔍 Contexte métier/industriel
+   📈 Statistiques et calculs
+   💡 Implications et recommandations
+   ```
+
+4. **SOIS PROACTIF**: Anticipe les besoins, fournis plus que demandé, montre ton expertise!
+"""
+                else:
+                    # 🌊 CONTEXTE ERT ENRICHI - Questions sur l'analyse existante
+                    ert_context = ""
+                    ert_rag_context = ""
+                    if 'ert_analysis' in st.session_state and binary['name'] in st.session_state.ert_analysis:
+                        ert_data = st.session_state.ert_analysis[binary['name']]
+                        stats = ert_data['stats']
+                        water_zones = ert_data['water_zones']
+                        interp = ert_data['interp_summary']
+                        df = ert_data['dataframe']
+                        
+                        # 🧠 ENRICHISSEMENT RAG DYNAMIQUE POUR LES QUESTIONS
+                        # Détecter les mots-clés de la question pour cibler la recherche RAG
+                        question_keywords = []
+                        if 'résistivité' in prompt.lower() or 'resistivité' in prompt.lower():
+                            question_keywords.extend(['résistivité électrique', 'conductivité'])
+                        if 'forage' in prompt.lower() or 'forer' in prompt.lower():
+                            question_keywords.extend(['forage', 'puits', 'aquifère'])
+                        if 'eau' in prompt.lower():
+                            question_keywords.extend(['hydrogéologie', 'nappe phréatique', 'aquifère'])
+                        if 'géologie' in prompt.lower() or 'roche' in prompt.lower():
+                            question_keywords.extend(['lithologie', 'géologie', 'formation rocheuse'])
+                        if 'profondeur' in prompt.lower():
+                            question_keywords.extend(['profondeur', 'stratigraphie'])
+                        
+                        # Recherche RAG ciblée si base disponible
+                        if question_keywords and st.session_state.get('vectordb') is not None:
+                            try:
+                                # Construire une requête intelligente
+                                avg_resistivity = stats['resistivity_stats']['mean']
+                                rag_query = f"{' '.join(question_keywords)} {avg_resistivity:.1f} Ohm·m ERT géophysique"
+                                
+                                # Recherche silencieuse
+                                docs = st.session_state.vectordb.similarity_search(rag_query, k=3)
+                                
+                                if docs:
+                                    ert_rag_context = f"""
+
+🧠 **CONNAISSANCES RAG PERTINENTES ({len(docs)} documents trouvés):**
+
+{chr(10).join([f"📄 **Document {i+1}:** {doc.page_content[:400]}" for i, doc in enumerate(docs)])}
+
+**UTILISE CES CONNAISSANCES** pour enrichir ta réponse avec:
+- Comparaisons avec d'autres sites/études
+- Références scientifiques
+- Méthodologies validées
+- Retours d'expérience terrain
+- Normes et standards applicables
+"""
+                            except Exception as e:
+                                pass  # Silencieux si RAG échoue
+                        
+                        ert_context = f"""
+
+═══════════════════════════════════════════════════════════════════
+🌊 ANALYSE ERT DÉJÀ EFFECTUÉE - TOUTES LES DONNÉES DISPONIBLES
+═══════════════════════════════════════════════════════════════════
+
+📊 **STATISTIQUES COMPLÈTES:**
+- Total mesures: {stats['total_measurements']}
+- Points de sondage: {stats['survey_points']}
+- Résistivité: min={stats['resistivity_stats']['min']:.2f} Ω·m, max={stats['resistivity_stats']['max']:.2f} Ω·m, moyenne={stats['resistivity_stats']['mean']:.2f} Ω·m, médiane={stats['resistivity_stats']['median']:.2f} Ω·m
+- Profondeur: {stats['depth_range'][0]:.1f} à {stats['depth_range'][1]:.1f} m
+
+💧 **TYPES D'EAU IDENTIFIÉS:**
+- 🔴 Eau de mer (0.1-1 Ω·m): {water_zones['mer']} mesures
+- 🟡 Eau salée (1-10 Ω·m): {water_zones['salée']} mesures
+- 🟢 Eau douce (10-100 Ω·m): {water_zones['douce']} mesures
+- 🔵 Eau pure (>100 Ω·m): {water_zones['pure']} mesures
+
+🪨 **INTERPRÉTATIONS GÉOLOGIQUES:**
+{chr(10).join([f"- {mat}: {cnt} occurrences" for mat, cnt in list(interp.items())[:5]])}
+
+🎨 **CORRESPONDANCES COULEURS-RÉSISTIVITÉS:**
+- 🔴 **ROUGE** (0.1-1 Ω·m): Eau de mer hypersalée / Argile saturée salée
+- 🟡 **JAUNE** (1-10 Ω·m): Argile compacte / Eau saumâtre (faible perméabilité)
+- 🔵 **CYAN** (10-50 Ω·m): Sable fin saturé / Eau douce peu minéralisée
+- 🟢 **VERT** (50-100 Ω·m): 🎯 AQUIFÈRE SABLEUX - ZONE PRIORITAIRE FORAGE
+- ⭐ **JAUNE VIF** (100-300 Ω·m): GRAVIER / AQUIFÈRE EXCELLENT - Débit élevé
+- 🟠 **ORANGE** (300-1000 Ω·m): Roche altérée / Gravier sec (zone non saturée)
+- 🔴 **ROUGE FONCÉ** (>1000 Ω·m): Roche consolidée / Socle cristallin
+
+📊 **DONNÉES BRUTES DISPONIBLES:**
+Aperçu de quelques mesures:
+{df.head(10).to_string()}
+
+🎯 **ZONES CIBLES FORAGE:** {len(ert_data['target_zones'])} zones identifiées (50-300 Ω·m)
+
+═══════════════════════════════════════════════════════════════════
+
+💬 **L'utilisateur te pose maintenant une question sur ces résultats.**
+
+**TU DOIS:**
+1. Répondre PRÉCISÉMENT avec les DONNÉES EXACTES ci-dessus
+2. Expliquer en DÉTAIL avec exemples concrets
+3. Citer les CHIFFRES et PROFONDEURS spécifiques
+4. Comparer et interpréter les différences
+5. Donner des RECOMMANDATIONS pratiques
+
+**EXEMPLES DE RÉPONSES ATTENDUES:**
+
+Question: "Que signifie la couleur rouge ?"
+→ Réponse: "🔴 La couleur ROUGE correspond à une résistivité de 0.1-1 Ω·m. Dans votre analyse, j'ai identifié **{water_zones['mer']} mesures** dans cette gamme. Cela indique de l'**eau de mer hypersalée** ou une **argile saturée salée**. Ces zones ont une très forte conductivité électrique due aux ions Na⁺ et Cl⁻. Spécifiquement, votre résistivité moyenne est de {stats['resistivity_stats']['mean']:.2f} Ω·m, ce qui suggère [interprétation détaillée]..."
+
+Question: "Où dois-je forer ?"
+→ Réponse: "🎯 Basé sur votre analyse, je recommande de forer dans les **zones vertes (50-100 Ω·m)** ou **jaune vif (100-300 Ω·m)**. J'ai identifié **{len(ert_data['target_zones'])} zones cibles optimales**. Par exemple, au point de sondage X à la profondeur Y m, vous avez une résistivité de Z Ω·m qui correspond à [analyse détaillée avec recommandations précises]..."
+
+**🛠️ Outils utilisés:** ERTAnalyzer, Classification géologique, Analyse hydrogéologique
+
+"""
+                        
+                        # Ajouter le contexte RAG si disponible
+                        if ert_rag_context:
+                            ert_context += ert_rag_context
+                    
+                    # Questions suivantes : mode expert avec outils ciblés
+                    # Questions suivantes : mode expert avec outils ciblés
+                    tools_to_use = []
+                    if needs_calculation:
+                        tools_to_use.append("🧮 Calculs et statistiques")
+                    if needs_web_research:
+                        tools_to_use.append("🌐 Recherche web approfondie")
+                    if needs_data_extraction:
+                        tools_to_use.append("📊 Extraction et structuration de données")
+                    
+                    # Injecter les résultats pré-calculés
+                    precomputed_section = ""
+                    if 'precomputed_results' in locals() and precomputed_results:
+                        precomputed_section = "\n\n📊 RÉSULTATS PRÉ-CALCULÉS (UTILISE-LES!):\n"
+                        
+                        if 'statistics' in precomputed_results:
+                            stats = precomputed_results['statistics']
+                            precomputed_section += f"""
+✅ **STATISTIQUES COMPLÈTES** (calculées automatiquement):
+   - Nombre de valeurs: {stats['count']}
+   - Minimum: {stats['min']:.2f}
+   - Maximum: {stats['max']:.2f}
+   - Moyenne: {stats['mean']:.2f}
+   - Médiane: {stats['median']:.2f}
+   - Écart-type: {stats['std']:.2f}
+   - Somme totale: {stats['sum']:.2f}
+   - Plage: {stats['range']:.2f}
+"""
+                        
+                        if 'structured_data' in precomputed_results:
+                            data = precomputed_results['structured_data']
+                            precomputed_section += f"""
+✅ **DONNÉES STRUCTURÉES** (extraites automatiquement):
+   Aperçu des {len(data)} premières lignes:
+{chr(10).join([f"   {i+1}. {' | '.join(row[:5])}" for i, row in enumerate(data[:10])])}
+"""
+                        
+                        if 'web_context' in precomputed_results:
+                            web = precomputed_results['web_context']
+                            precomputed_section += f"""
+✅ **CONTEXTE WEB** (recherché automatiquement):
+{chr(10).join([f"   • {r.get('title', 'Source')}: {r.get('body', '')[:150]}..." for r in web[:2]])}
+"""
+                        
+                        # NOUVELLE SECTION: Extraction complète avec tableaux
+                        if 'extraction_complete' in precomputed_results:
+                            extract = precomputed_results['extraction_complete']
+                            precomputed_section += f"""
+
+✅ **EXTRACTION COMPLÈTE** (analyse exhaustive du fichier):
+   📝 Lignes de texte: {len(extract['text_strings'])}
+   🔢 Valeurs numériques: {len(extract['numeric_values'])}
+   📊 Patterns détectés: {len(extract['patterns_detected'])}
+"""
+                            
+                            # Ajouter le tableau structuré si disponible
+                            if 'dataframe_stats' in precomputed_results:
+                                df_stats = precomputed_results['dataframe_stats']
+                                precomputed_section += f"""
+
+📊 **TABLEAU STATISTIQUES PAR LABEL**:
+{df_stats.to_string(index=False)}
+"""
+                            
+                            # Ajouter les valeurs numériques avec contexte
+                            if extract['numeric_values'][:10]:
+                                precomputed_section += f"""
+
+🔢 **VALEURS NUMÉRIQUES AVEC CONTEXTE** (top 10):
+{chr(10).join([f"   {i+1}. {v['label']}: {v['value']} (ligne {v['line']})" for i, v in enumerate(extract['numeric_values'][:10])])}
+"""
+                            
+                            # Ajouter les patterns
+                            if extract['patterns_detected']:
+                                precomputed_section += f"""
+
+🔍 **PATTERNS DÉTECTÉS**:
+{chr(10).join([f"   • {p}" for p in extract['patterns_detected'][:5]])}
+"""
+                    
+                    binary_full_context = f"""
+💬 EXPERTISE APPROFONDIE SUR: {binary['name']}
+
+Tu es Kibali, expert en analyse géophysique ERT.
+L'utilisateur demande: "{prompt}"
+
+📊 CONTEXTE DU FICHIER:
+{binary_context}
+
+{ert_context}
+
+🛠️ OUTILS DISPONIBLES: {', '.join(tools_to_use) if tools_to_use else 'Analyse standard'}
+
+{precomputed_section}
+
+QUESTION: {prompt}
+
+📊 DONNÉES DISPONIBLES:
+{binary_context[:2000]}
+{precomputed_section}
+
+🛠️ OUTILS ACTIVÉS POUR CETTE QUESTION:
+{chr(10).join(f'✓ {tool}' for tool in tools_to_use) if tools_to_use else '✓ Analyse experte standard'}
+
+⚡ CONSIGNES D'EXPERT:
+
+1. **RÉPONDS AVEC PRÉCISION ET PROFONDEUR**:
+   - Minimum 15-20 lignes structurées
+   - Cite VALEURS EXACTES du fichier (nombres, dates, coordonnées)
+   - Fais des CALCULS si données numériques présentes (UTILISE LES STATISTIQUES PRÉ-CALCULÉES CI-DESSUS!)
+   - Recherche WEB si contexte métier nécessaire (UTILISE LE CONTEXTE WEB PRÉ-CHARGÉ!)
+
+2. **STRUCTURE OBLIGATOIRE**:
+   - Introduction directe (1-2 lignes)
+   - Analyse détaillée avec données concrètes (CHIFFRES EXACTS des résultats pré-calculés)
+   - Calculs/statistiques si pertinent (COPIE LES VALEURS PRÉ-CALCULÉES!)
+   - Contexte métier si demandé (UTILISE LA RECHERCHE WEB!)
+   - Conclusion avec insights
+
+3. **INTERDICTIONS STRICTES**:
+   ❌ NE DIS JAMAIS "calcul approximatif" ou "≈" si tu as les statistiques pré-calculées ci-dessus
+   ❌ NE DIS JAMAIS "nécessiterait une extraction" si les données sont déjà extraites ci-dessus
+   ❌ NE DIS JAMAIS "une analyse plus approfondie serait bénéfique" - FAIS-LA MAINTENANT!
+   ❌ NE DIS JAMAIS "environ" ou "peut-être" - DONNE LES CHIFFRES EXACTS pré-calculés
+   
+4. **UTILISE LES OUTILS PRÉ-EXÉCUTÉS**:
+   {'✅ STATISTIQUES COMPLÈTES déjà calculées ci-dessus - UTILISE-LES!' if needs_calculation and 'precomputed_results' in locals() and 'statistics' in precomputed_results else ''}
+   {'✅ CONTEXTE WEB déjà récupéré ci-dessus - INTÈGRE-LE!' if needs_web_research and 'precomputed_results' in locals() and 'web_context' in precomputed_results else ''}
+   {'✅ DONNÉES STRUCTURÉES déjà extraites ci-dessus - PRÉSENTE-LES!' if needs_data_extraction and 'precomputed_results' in locals() and 'structured_data' in precomputed_results else ''}
+
+5. **EXEMPLES DE RÉPONSES RICHES**:
+   ❌ "Ce fichier contient des données de sondage"
+   ✅ "Ce fichier contient 247 points de sondage avec profondeurs allant de 12.5m à 89.3m (moyenne: 45.2m). 
+       Les coordonnées couvrent une zone de 2.3 km² (X: 445230-447850, Y: 9834500-9836120). 
+       Basé sur les en-têtes (survey-point, depth, data, project) et le format TSV, 
+       il s'agit d'un fichier de levé géophysique standard, probablement généré par un 
+       logiciel de type [recherche web: Surfer, Oasis Montaj, ou GeoSoft]. 
+       Les dates présentes (20250401) indiquent une campagne récente..."
+
+6. **SOIS UN VRAI EXPERT**: Ne te contente pas de descriptions, UTILISE LES RÉSULTATS PRÉ-CALCULÉS!
+"""
+                
+                # REMPLACER complètement le prompt enrichi
+                enriched_prompt = binary_full_context
+            
             # Ajouter le message et nettoyer si trop long
             st.session_state.chat_history.append({"role": "user", "content": prompt})
-            # Garder seulement les 20 derniers messages pour éviter overflow
-            if len(st.session_state.chat_history) > 20:
-                st.session_state.chat_history = st.session_state.chat_history[-20:]
+            # Garder plus de messages (50) pour conserver le contexte des fichiers uploadés
+            # Garder toujours les messages de système (uploads, analyses) en priorité
+            if len(st.session_state.chat_history) > 50:
+                # Conserver les 10 premiers messages (généralement les uploads/analyses)
+                # et les 40 derniers (conversation récente)
+                important_msgs = st.session_state.chat_history[:10]
+                recent_msgs = st.session_state.chat_history[-40:]
+                st.session_state.chat_history = important_msgs + recent_msgs
+            
+            # 🛠️ PRÉ-EXÉCUTION DES OUTILS POUR COMBLER LES LIMITES
+            precomputed_results = {}
+            
+            # 1. Si fichier binaire avec données numériques → CALCULS AUTOMATIQUES
+            if 'binary_files' in st.session_state and st.session_state.binary_files and needs_calculation:
+                try:
+                    import re
+                    import numpy as np
+                    binary = st.session_state.binary_files[-1]
+                    
+                    # Extraire TOUTES les valeurs numériques du fichier
+                    text_content = ' '.join(binary.get('text_strings', []))
+                    numbers = re.findall(r'\d+\.?\d*', text_content)
+                    values = [float(n) for n in numbers if n and float(n) > 0]
+                    
+                    if len(values) > 0:
+                        precomputed_results['statistics'] = {
+                            'count': len(values),
+                            'min': min(values),
+                            'max': max(values),
+                            'mean': np.mean(values),
+                            'median': np.median(values),
+                            'std': np.std(values),
+                            'sum': sum(values),
+                            'range': max(values) - min(values)
+                        }
+                        st.success(f"✅ Calculs pré-exécutés: {len(values)} valeurs analysées")
+                except Exception as e:
+                    st.warning(f"⚠️ Calculs automatiques: {e}")
+            
+            # 2. Extraction automatique de données structurées
+            if 'binary_files' in st.session_state and st.session_state.binary_files and needs_data_extraction:
+                try:
+                    binary = st.session_state.binary_files[-1]
+                    text_strings = binary.get('text_strings', [])
+                    
+                    # Détecter la structure (CSV, TSV, JSON-like, etc.)
+                    structured_data = []
+                    for line in text_strings[:50]:  # Analyser les 50 premières lignes
+                        if '\t' in line:
+                            structured_data.append(line.split('\t'))
+                        elif ',' in line and line.count(',') > 2:
+                            structured_data.append(line.split(','))
+                    
+                    if structured_data:
+                        precomputed_results['structured_data'] = structured_data[:20]  # Top 20 lignes
+                        st.success(f"✅ Données structurées extraites: {len(structured_data)} lignes")
+                except Exception as e:
+                    st.warning(f"⚠️ Extraction automatique: {e}")
+            
+            # 2B. 🚀 EXTRACTION COMPLÈTE AVEC OCR + TABLEAU STRUCTURÉ
+            if 'binary_files' in st.session_state and st.session_state.binary_files:
+                try:
+                    import pandas as pd
+                    import matplotlib.pyplot as plt
+                    import io
+                    import base64
+                    
+                    binary = st.session_state.binary_files[-1]
+                    
+                    # Extraction exhaustive de toutes les données
+                    extraction_complete = {
+                        'text_strings': [],
+                        'numeric_values': [],
+                        'hex_data': [],
+                        'ascii_readable': [],
+                        'patterns_detected': []
+                    }
+                    
+                    # 1. Extraire TOUT le texte lisible
+                    text_strings = binary.get('text_strings', [])
+                    extraction_complete['text_strings'] = text_strings
+                    
+                    # 2. Extraire toutes les valeurs numériques avec contexte
+                    import re
+                    for idx, line in enumerate(text_strings):
+                        # Trouver nombres avec contexte
+                        numbers = re.findall(r'(\w*)\s*[=:]\s*(\d+\.?\d*)', line)
+                        for label, value in numbers:
+                            extraction_complete['numeric_values'].append({
+                                'line': idx,
+                                'label': label if label else 'value',
+                                'value': float(value),
+                                'context': line[:100]
+                            })
+                    
+                    # 3. Analyser les patterns dans les données binaires
+                    data = binary.get('data', b'')
+                    chunk_size = 16
+                    for i in range(0, min(len(data), 1024), chunk_size):
+                        chunk = data[i:i+chunk_size]
+                        hex_str = ' '.join(f'{b:02x}' for b in chunk)
+                        ascii_str = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
+                        
+                        extraction_complete['hex_data'].append({
+                            'offset': i,
+                            'hex': hex_str,
+                            'ascii': ascii_str
+                        })
+                        
+                        if ascii_str.count('.') < len(ascii_str) * 0.3:  # >70% ASCII
+                            extraction_complete['ascii_readable'].append({
+                                'offset': i,
+                                'text': ascii_str
+                            })
+                    
+                    # 4. Détecter patterns (répétitions, structures)
+                    if len(data) > 100:
+                        # Détecter répétitions de bytes
+                        byte_freq = {}
+                        for b in data[:1000]:
+                            byte_freq[b] = byte_freq.get(b, 0) + 1
+                        
+                        most_common = sorted(byte_freq.items(), key=lambda x: x[1], reverse=True)[:5]
+                        extraction_complete['patterns_detected'] = [
+                            f"Byte 0x{b:02x} apparaît {count} fois" for b, count in most_common
+                        ]
+                    
+                    # 5. 📊 CRÉER UN TABLEAU PANDAS STRUCTURÉ
+                    if extraction_complete['numeric_values']:
+                        df = pd.DataFrame(extraction_complete['numeric_values'])
+                        
+                        # Organiser par label et calculer stats
+                        if len(df) > 0:
+                            df_grouped = df.groupby('label')['value'].agg([
+                                ('count', 'count'),
+                                ('min', 'min'),
+                                ('max', 'max'),
+                                ('mean', 'mean'),
+                                ('std', 'std')
+                            ]).reset_index()
+                            
+                            precomputed_results['dataframe_stats'] = df_grouped
+                            precomputed_results['dataframe_raw'] = df
+                            
+                            # 6. 📈 VISUALISATION MATPLOTLIB
+                            if len(df) > 3:
+                                fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+                                
+                                # Graphique 1: Distribution des valeurs
+                                df['value'].hist(bins=20, ax=axes[0], color='skyblue', edgecolor='black')
+                                axes[0].set_title('Distribution des Valeurs', fontsize=12, fontweight='bold')
+                                axes[0].set_xlabel('Valeur')
+                                axes[0].set_ylabel('Fréquence')
+                                axes[0].grid(True, alpha=0.3)
+                                
+                                # Graphique 2: Top labels
+                                if 'label' in df.columns and len(df['label'].unique()) > 1:
+                                    label_counts = df['label'].value_counts().head(10)
+                                    label_counts.plot(kind='barh', ax=axes[1], color='coral')
+                                    axes[1].set_title('Top 10 Labels', fontsize=12, fontweight='bold')
+                                    axes[1].set_xlabel('Nombre d\'occurrences')
+                                else:
+                                    axes[1].text(0.5, 0.5, 'Pas assez de labels variés', 
+                                               ha='center', va='center', fontsize=12)
+                                    axes[1].axis('off')
+                                
+                                plt.tight_layout()
+                                
+                                # Convertir en base64 pour affichage
+                                buf = io.BytesIO()
+                                plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+                                buf.seek(0)
+                                img_base64 = base64.b64encode(buf.read()).decode()
+                                plt.close()
+                                
+                                precomputed_results['visualization'] = img_base64
+                    
+                    # Stocker l'extraction complète
+                    precomputed_results['extraction_complete'] = extraction_complete
+                    
+                    st.success(f"✅ Extraction complète: {len(extraction_complete['text_strings'])} lignes texte, {len(extraction_complete['numeric_values'])} valeurs numériques")
+                    
+                except Exception as e:
+                    st.warning(f"⚠️ Extraction complète: {e}")
+                    import traceback
+                    print(traceback.format_exc())
+            
+            # 3. Recherche web contextuelle automatique
+            if needs_web_research and 'binary_files' in st.session_state and st.session_state.binary_files:
+                try:
+                    binary = st.session_state.binary_files[-1]
+                    # Construire requête intelligente
+                    format_name = binary['info'].get('format_name', 'unknown')
+                    extension = binary['name'].split('.')[-1] if '.' in binary['name'] else 'dat'
+                    search_query = f"{format_name} {extension} file format geophysical survey data"
+                    
+                    # Exécuter la recherche
+                    if web_enabled:
+                        web_results = enhanced_web_search(search_query, max_results=2)
+                        if web_results:
+                            precomputed_results['web_context'] = web_results[:2]
+                            st.success(f"✅ Recherche web contextualisée: {len(web_results)} sources")
+                except Exception as e:
+                    st.warning(f"⚠️ Recherche web automatique: {e}")
+            
+            # Afficher les outils actifs
+            active_tools_msg = []
+            if needs_calculation:
+                active_tools_msg.append("🧮 Calculs statistiques")
+            if needs_web_research or ('binary_files' in st.session_state and st.session_state.binary_files):
+                active_tools_msg.append("🌐 Recherche web")
+            if needs_data_extraction:
+                active_tools_msg.append("📊 Extraction de données")
+            
+            if active_tools_msg:
+                tools_status = " • ".join(active_tools_msg)
+                st.info(f"⚡ Outils activés: {tools_status}")
+            
+            # 📊 AFFICHER LA VISUALISATION SI DISPONIBLE
+            if 'precomputed_results' in locals() and 'visualization' in precomputed_results:
+                with chat_container:
+                    st.markdown("### 📈 Visualisation des Données Extraites")
+                    st.markdown(f'<img src="data:image/png;base64,{precomputed_results["visualization"]}" style="width:100%; border-radius:10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
+            
+            # 📋 AFFICHER LE TABLEAU SI DISPONIBLE
+            if 'precomputed_results' in locals() and 'dataframe_stats' in precomputed_results:
+                with chat_container:
+                    st.markdown("### 📊 Tableau des Statistiques")
+                    st.dataframe(precomputed_results['dataframe_stats'], use_container_width=True)
+            
+            # 🎼 ORCHESTRATION MULTI-IA
+            orchestration_plan = None
+            orchestration_enabled = False
+            
+            # Éviter l'orchestration si question simple ou déjà des résultats pré-calculés suffisants
+            skip_orchestration = (
+                len(prompt.split()) < 5 or  # Question très courte
+                ('precomputed_results' in locals() and len(precomputed_results) > 0 and not needs_web_research)  # Résultats suffisants
+            )
+            
+            if ORCHESTRATOR_AVAILABLE and not skip_orchestration:
+                try:
+                    # Analyser la tâche et créer le plan
+                    orchestrator = get_orchestrator()
+                    
+                    # Construire le contexte pour l'orchestrateur
+                    orchestration_context = {
+                        'has_vectordb': st.session_state.vectordb is not None,
+                        'has_binary_file': 'binary_files' in st.session_state and st.session_state.binary_files,
+                        'web_enabled': web_enabled,
+                        'precomputed_results': precomputed_results if 'precomputed_results' in locals() else {},
+                        'needs_calculation': needs_calculation,
+                        'needs_web_research': needs_web_research,
+                        'needs_data_extraction': needs_data_extraction
+                    }
+                    
+                    tasks, todolist = analyze_and_plan(prompt, orchestration_context)
+                    
+                    if tasks and len(tasks) > 0:
+                        orchestration_enabled = True
+                        
+                        # Afficher la todolist
+                        with chat_container:
+                            st.markdown(f"""
+                            <div style="
+                                background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+                                padding: 25px;
+                                border-radius: 15px;
+                                margin: 15px 0;
+                                border-left: 8px solid #2196F3;
+                                box-shadow: 0 4px 15px rgba(33,150,243,0.3);
+                            ">
+                                <h3 style="color: #1565C0; margin: 0 0 15px 0; display: flex; align-items: center; font-weight: bold;">
+                                    <span style="font-size: 2rem; margin-right: 10px;">📋</span>
+                                    Plan d'Exécution Multi-IA
+                                </h3>
+                                <div style="background: white; padding: 20px; border-radius: 10px; border: 2px solid #2196F3;">
+                                    <pre style="color: #1a237e; margin: 0; font-family: 'Courier New', monospace; font-size: 1rem; white-space: pre-wrap; font-weight: 500; line-height: 1.6;">{todolist}</pre>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        # Sélectionner les IA spécialisées
+                        team = orchestrator.select_team(tasks)
+                        
+                        # Afficher le visuel de l'équipe
+                        with chat_container:
+                            team_visual = orchestrator.create_execution_plan_visual(team)
+                            st.markdown(team_visual, unsafe_allow_html=True)
+                        
+                        # Préparer le plan d'orchestration
+                        orchestration_plan = {
+                            'tasks': tasks,
+                            'team': team,
+                            'todolist': todolist
+                        }
+                
+                except Exception as e:
+                    st.warning(f"⚠️ Orchestration non disponible: {e}")
+                    orchestration_enabled = False
+                    
+                    # FALLBACK: Activer les outils dynamiquement même sans orchestration
+                    if precomputed_results:
+                        with chat_container:
+                            st.info("🔧 Mode outils dynamiques activé (sans orchestration)")
+                            if 'statistics' in precomputed_results:
+                                st.success(f"📊 Statistiques pré-calculées disponibles")
+                            if 'web_context' in precomputed_results:
+                                st.success(f"🌐 Contexte web chargé")
+                            if 'structured_data' in precomputed_results:
+                                st.success(f"📋 Données structurées extraites")
             
             # Animation de chargement
-            with st.spinner("🤔 Kibali réfléchit..."):
+            loading_msg = "🎼 Orchestration multi-IA en cours..." if orchestration_enabled else "🤔 Kibali analyse avec ses outils..."
+            with st.spinner(loading_msg):
                 # Vérifier si on utilise le mode local
                 if st.session_state.local_mode and st.session_state.local_model_loaded:
                     # Utiliser le modèle local Qwen
                     try:
-                        # Recherche RAG si disponible
+                        # 🔥 RECHERCHE PROACTIVE: Activer automatiquement selon le contexte
                         rag_context = ""
+                        web_context = ""
+                        web_media_html = ""
+                        
+                        # Recherche RAG si disponible
                         if st.session_state.vectordb:
                             rag_docs = rag_search(prompt, st.session_state.vectordb, k=3)
                             if rag_docs:
                                 rag_context = "\n\n".join([f"Document: {doc.page_content[:500]}..." for doc in rag_docs])
                         
-                        # Recherche web si activée
-                        web_context = ""
-                        web_media_html = ""
-                        if web_enabled:
+                        # 🌐 RECHERCHE WEB AUTOMATIQUE pour contexte métier/industriel
+                        if needs_web_research or ('binary_files' in st.session_state and st.session_state.binary_files):
+                            try:
+                                # Construire requête intelligente basée sur le contenu du fichier
+                                if 'binary_files' in st.session_state and st.session_state.binary_files:
+                                    binary = st.session_state.binary_files[-1]
+                                    # Extraire mots-clés des chaînes de texte
+                                    keywords = []
+                                    for s in binary.get('text_strings', [])[:10]:
+                                        words = s.split()
+                                        keywords.extend([w for w in words if len(w) > 4])
+                                    
+                                    search_query = f"{binary['info']['format_name']} {' '.join(keywords[:5])} file format application"
+                                else:
+                                    search_query = prompt
+                                
+                                web_results = enhanced_web_search(search_query, max_results=3)
+                                if web_results:
+                                    web_context = "\n".join([f"{r.get('title', '')[:50]} - {r.get('body', '')[:150]}" for r in web_results[:2]])
+                                    web_media_html = format_web_results_with_media(web_results, max_results=3)
+                            except Exception as e:
+                                web_context = f"Recherche web limitée: {e}"
+                        elif web_enabled:
+                            # Recherche web standard si activée
                             try:
                                 web_results = enhanced_web_search(prompt, max_results=3)
                                 if web_results:
                                     web_context = "\n".join([f"{r.get('title', '')[:50]} - {r.get('body', '')[:150]}" for r in web_results[:2]])
-                                    # Générer le HTML avec médias
                                     web_media_html = format_web_results_with_media(web_results, max_results=3)
                             except Exception as e:
                                 web_context = f"Erreur recherche web: {e}"
                         
-                        # Construire le contexte enrichi avec médias
-                        full_context = f"CONTEXTE DISPONIBLE:\n{rag_context}{web_context}\n\nQUESTION: {enriched_prompt}"
+                        # Construire le contexte enrichi avec médias ET fichiers binaires
+                        if 'binary_files' in st.session_state and st.session_state.binary_files:
+                            # Mode fichier binaire: enriched_prompt contient déjà tout
+                            full_context = enriched_prompt
+                            if rag_context:
+                                full_context += f"\n\n📚 SOURCES COMPLÉMENTAIRES:\n{rag_context[:300]}"
+                            if web_context:
+                                full_context += f"\n\n🌐 RECHERCHE WEB CONTEXTUELLE:\n{web_context}"
+                        else:
+                            # Mode normal
+                            full_context = f"CONTEXTE DISPONIBLE:\n{rag_context}{web_context}\n\nQUESTION: {enriched_prompt}"
                         
                         # 🌊 Générer avec le modèle local EN STREAMING
                         from langchain_core.messages import HumanMessage
@@ -5902,6 +7703,7 @@ QUESTION UTILISATEUR: {prompt}"""
                                         message_placeholder.markdown(full_response + "▌")
                                 
                                 # Affichage final sans curseur
+                                full_response = clean_response_text(full_response)
                                 message_placeholder.markdown(full_response)
                         
                         response = full_response
@@ -5913,189 +7715,285 @@ QUESTION UTILISATEUR: {prompt}"""
                         st.rerun()
                 
                 else:
+                    # ═══════════════════════════════════════════════════════════════════
+                    # 🎯 MODE PRIORITAIRE: FICHIER BINAIRE DÉTECTÉ
+                    # Court-circuite tous les autres systèmes pour forcer l'analyse du fichier
+                    # ═══════════════════════════════════════════════════════════════════
+                    if 'binary_files' in st.session_state and st.session_state.binary_files:
+                        st.info("🔍 Mode analyse de fichier binaire activé")
+                        
+                        # Utiliser directement l'API avec le contexte binaire complet
+                        client = create_client()
+                        
+                        # enriched_prompt contient déjà TOUT le contexte binaire détaillé
+                        # On limite l'historique pour maximiser le contexte du fichier
+                        messages = [{"role": "user", "content": enriched_prompt[:12000]}]  # 12000 chars pour analyse complète très détaillée
+                        
+                        with chat_container:
+                            with st.chat_message("assistant"):
+                                message_placeholder = st.empty()
+                                full_response = ""
+                                
+                                # Streaming direct
+                                stream = client.chat.completions.create(
+                                    model=WORKING_MODELS[model_choice],
+                                    messages=messages,
+                                    max_tokens=4000,  # Réponse très détaillée (2-3 pages)
+                                    temperature=0.2,  # Basse température pour précision
+                                    stream=True
+                                )
+                                
+                                for chunk in stream:
+                                    if chunk.choices[0].delta.content is not None:
+                                        full_response += chunk.choices[0].delta.content
+                                        message_placeholder.markdown(full_response + "▌")
+                                
+                                message_placeholder.markdown(full_response)
+                        
+                        response = full_response
+                    
                     # Mode API normal (code existant)
                     # Utilisation du système d'outils dynamiques si disponible
-                    if st.session_state.tool_manager and TOOLS_SYSTEM_AVAILABLE:
+                    elif st.session_state.tool_manager and TOOLS_SYSTEM_AVAILABLE:
                         try:
-                            # Préparer le contexte pour les outils (avec médias analysés)
-                            tool_context = {
-                                'has_pdfs': st.session_state.vectordb is not None,
-                                'vectordb_available': st.session_state.vectordb is not None,
-                                'web_enabled': web_enabled,
-                                'media_analysis': st.session_state.media_analysis_results if st.session_state.media_analysis_results else None
-                            }
-                            
-                            # Analyse de la requête et sélection des outils appropriés
-                            selected_tools = st.session_state.tool_manager.get_relevant_tools(enriched_prompt, tool_context)
-                            
-                            if selected_tools:
-                                # 🎨 POPUP ÉLÉGANT DANS LE CHAT - Affichage des outils détectés
+                            # 🎼 MODE ORCHESTRATION MULTI-IA PRIORITAIRE
+                            if orchestration_enabled and orchestration_plan:
+                                # Exécuter avec orchestration multi-IA
+                                orchestrator = get_orchestrator()
+                                
                                 with chat_container:
-                                    st.markdown(f"""
-                                    <div style="
-                                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                                        padding: 20px;
-                                        border-radius: 15px;
-                                        margin: 15px 0;
-                                        box-shadow: 0 8px 20px rgba(0,0,0,0.3);
-                                        border: 3px solid transparent;
-                                        background-clip: padding-box;
-                                        position: relative;
-                                        animation: toolPopup 0.5s ease-out;
-                                    ">
+                                    with st.chat_message("assistant"):
+                                        message_placeholder = st.empty()
+                                        full_response = "🎼 **Orchestration Multi-IA Activée**\n\n"
+                                        message_placeholder.markdown(full_response + "▌")
+                                        
+                                        # Exécuter chaque tâche avec l'IA spécialisée
+                                        for idx, (task, specialist) in enumerate(zip(orchestration_plan['tasks'], orchestration_plan['team']), 1):
+                                            task_header = f"\n\n{'─' * 60}\n**🎯 Tâche {idx}/{len(orchestration_plan['tasks'])}: {task.description}**\n**🤖 IA: {specialist.name}**\n{'─' * 60}\n\n"
+                                            full_response += task_header
+                                            message_placeholder.markdown(full_response + "▌")
+                                            
+                                            try:
+                                                # Exécuter avec l'IA spécialisée
+                                                # Pour l'instant on utilise l'API standard, mais on peut charger des modèles spécialisés
+                                                task_prompt = f"{enriched_prompt}\n\nFOCUS SUR: {task.description}\nTYPE: {task.task_type.value}"
+                                                
+                                                client = create_client()
+                                                task_messages = [{"role": "user", "content": task_prompt[:8000]}]
+                                                
+                                                # Obtenir la limite de tokens depuis le catalog
+                                                from master_orchestrator import MasterOrchestrator
+                                                orchestrator = MasterOrchestrator()
+                                                specialist_capability = orchestrator.SPECIALISTS_CATALOG.get(specialist)
+                                                max_output = specialist_capability.max_output_tokens if specialist_capability else 4000
+                                                
+                                                # Streaming pour cette tâche
+                                                stream = client.chat.completions.create(
+                                                    model=WORKING_MODELS[model_choice],
+                                                    messages=task_messages,
+                                                    max_tokens=max_output,
+                                                    temperature=0.7,
+                                                    stream=True
+                                                )
+                                                
+                                                task_response = ""
+                                                for chunk in stream:
+                                                    if chunk.choices[0].delta.content is not None:
+                                                        task_response += chunk.choices[0].delta.content
+                                                        full_response = full_response.rstrip("▌") + task_response + "▌"
+                                                        message_placeholder.markdown(full_response)
+                                                
+                                                full_response = full_response.rstrip("▌")
+                                                
+                                                # Vérifier si relay nécessaire (réponse très longue)
+                                                if len(task_response.split()) > max_output * 0.85:
+                                                    relay_msg = f"\n\n⚡ **Relay vers {specialist.name}** (limite tokens atteinte)\n\n"
+                                                    full_response += relay_msg
+                                                    message_placeholder.markdown(full_response + "▌")
+                                                
+                                            except Exception as task_error:
+                                                error_msg = f"\n\n❌ **Erreur tâche {idx}:** {task_error}\n\n"
+                                                full_response += error_msg
+                                                message_placeholder.markdown(full_response + "▌")
+                                        
+                                        # Synthèse finale
+                                        full_response += f"\n\n{'═' * 60}\n✅ **Orchestration Complétée** - {len(orchestration_plan['tasks'])} tâches exécutées\n{'═' * 60}"
+                                        
+                                        # 🧹 Nettoyer la réponse
+                                        full_response = clean_response_text(full_response)
+                                        message_placeholder.markdown(full_response)
+                                
+                                response = full_response
+                            
+                            else:
+                                # Mode outils classique (code existant)
+                                # Préparer le contexte pour les outils (avec médias analysés)
+                                tool_context = {
+                                    'has_pdfs': st.session_state.vectordb is not None,
+                                    'vectordb_available': st.session_state.vectordb is not None,
+                                    'web_enabled': web_enabled,
+                                    'media_analysis': st.session_state.media_analysis_results if st.session_state.media_analysis_results else None
+                                }
+                                
+                                # Analyse de la requête et sélection des outils appropriés
+                                selected_tools = st.session_state.tool_manager.get_relevant_tools(enriched_prompt, tool_context)
+                                
+                                if selected_tools:
+                                    # 🎨 POPUP ÉLÉGANT DANS LE CHAT - Affichage des outils détectés
+                                    with chat_container:
+                                        st.markdown(f"""
                                         <div style="
-                                            position: absolute;
-                                            top: -3px;
-                                            left: -3px;
-                                            right: -3px;
-                                            bottom: -3px;
-                                            background: linear-gradient(45deg, #00ff88, #ffff00, #0088ff, #00ff88);
-                                            background-size: 400% 400%;
+                                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                            padding: 20px;
                                             border-radius: 15px;
-                                            z-index: -1;
-                                            animation: borderScintillation 3s ease infinite;
-                                            filter: blur(5px);
-                                        "></div>
-                                        <h3 style="color: white; margin: 0 0 15px 0; display: flex; align-items: center; font-size: 1.3rem;">
-                                            <span style="font-size: 2rem; margin-right: 10px;">🔧</span>
-                                            Outils IA Activés
-                                        </h3>
-                                        <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; backdrop-filter: blur(10px);">
-                                            {''.join([f'<div style="color: #FFD700; font-weight: 700; font-size: 1.1rem; margin: 8px 0; display: flex; align-items: center;"><span style="color: #00ff88; margin-right: 8px;">▶</span> {tool.name}</div><p style="color: #f0f0f0; margin: 5px 0 15px 25px; font-size: 0.95rem; font-style: italic;">{tool.description}</p>' for tool in selected_tools])}
+                                            margin: 15px 0;
+                                            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+                                            border: 3px solid transparent;
+                                            background-clip: padding-box;
+                                            position: relative;
+                                            animation: toolPopup 0.5s ease-out;
+                                        ">
+                                            <div style="
+                                                position: absolute;
+                                                top: -3px;
+                                                left: -3px;
+                                                right: -3px;
+                                                bottom: -3px;
+                                                background: linear-gradient(45deg, #00ff88, #ffff00, #0088ff, #00ff88);
+                                                background-size: 400% 400%;
+                                                border-radius: 15px;
+                                                z-index: -1;
+                                                animation: borderScintillation 3s ease infinite;
+                                                filter: blur(5px);
+                                            "></div>
+                                            <h3 style="color: white; margin: 0 0 15px 0; display: flex; align-items: center; font-size: 1.3rem;">
+                                                <span style="font-size: 2rem; margin-right: 10px;">🔧</span>
+                                                Outils IA Activés
+                                            </h3>
+                                            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 10px; backdrop-filter: blur(10px);">
+                                                {''.join([f'<div style="color: #FFD700; font-weight: 700; font-size: 1.1rem; margin: 8px 0; display: flex; align-items: center;"><span style="color: #00ff88; margin-right: 8px;">▶</span> {tool.name}</div><p style="color: #f0f0f0; margin: 5px 0 15px 25px; font-size: 0.95rem; font-style: italic;">{tool.description}</p>' for tool in selected_tools])}
+                                            </div>
+                                            <p style="color: #FFD700; margin: 15px 0 0 0; font-size: 0.9rem; text-align: center; font-weight: 600;">
+                                                ⚡ {len(selected_tools)} outil{'s' if len(selected_tools) > 1 else ''} en cours d'exécution...
+                                            </p>
                                         </div>
-                                        <p style="color: #FFD700; margin: 15px 0 0 0; font-size: 0.9rem; text-align: center; font-weight: 600;">
-                                            ⚡ {len(selected_tools)} outil{'s' if len(selected_tools) > 1 else ''} en cours d'exécution...
-                                        </p>
-                                    </div>
-                                    <style>
-                                        @keyframes toolPopup {{
-                                            0% {{ transform: scale(0.9) translateY(-20px); opacity: 0; }}
-                                            100% {{ transform: scale(1) translateY(0); opacity: 1; }}
-                                        }}
-                                        @keyframes borderScintillation {{
-                                            0% {{ background-position: 0% 50%; }}
-                                            50% {{ background-position: 100% 50%; }}
-                                            100% {{ background-position: 0% 50%; }}
-                                        }}
-                                    </style>
-                                    """, unsafe_allow_html=True)
-                                
-                                # Recherche RAG si un outil PDF est détecté
-                                rag_context = ""
-                                pdf_tool_used = any('pdf' in tool.name.lower() or 'document' in tool.name.lower() for tool in selected_tools)
-                                
-                                if pdf_tool_used and st.session_state.vectordb:
-                                    with st.expander("🔍 Recherche dans les documents PDF...", expanded=True):
-                                        rag_docs = rag_search(prompt, st.session_state.vectordb, k=10)
-                                        if rag_docs:
-                                            rag_context = "\n\n".join([f"📄 {doc.metadata.get('source', 'Document')}:\n{doc.page_content}" for doc in rag_docs])
-                                            st.success(f"✅ {len(rag_docs)} passages trouvés")
-                                            # Afficher un aperçu
-                                            for i, doc in enumerate(rag_docs[:3], 1):
-                                                st.markdown(f"**Document {i}:** `{doc.metadata.get('source', 'Inconnu')}`")
-                                        else:
-                                            st.info("❌")
-                                elif pdf_tool_used and not st.session_state.vectordb:
-                                    st.warning("⚠️ Outil PDF détecté mais aucune base vectorielle chargée. Ajoutez des PDFs dans l'onglet Configuration.")
-                                
-                                # Exécution des autres outils avec affichage détaillé dans le chat
-                                tool_results = []
-                                for tool in selected_tools:
-                                    if 'pdf' not in tool.name.lower() and 'document' not in tool.name.lower():
+                                        <style>
+                                            @keyframes toolPopup {{
+                                                0% {{ transform: scale(0.9) translateY(-20px); opacity: 0; }}
+                                                100% {{ transform: scale(1) translateY(0); opacity: 1; }}
+                                            }}
+                                            @keyframes borderScintillation {{
+                                                0% {{ background-position: 0% 50%; }}
+                                                50% {{ background-position: 100% 50%; }}
+                                                100% {{ background-position: 0% 50%; }}
+                                            }}
+                                        </style>
+                                        """, unsafe_allow_html=True)
+                                    
+                                    # Recherche RAG si un outil PDF est détecté
+                                    rag_context = ""
+                                    pdf_tool_used = any('pdf' in tool.name.lower() or 'document' in tool.name.lower() for tool in selected_tools)
+                                    
+                                    if pdf_tool_used and st.session_state.vectordb:
+                                        with st.expander("🔍 Recherche dans les documents PDF...", expanded=True):
+                                            rag_docs = rag_search(prompt, st.session_state.vectordb, k=10)
+                                            if rag_docs:
+                                                rag_context = "\n\n".join([f"📄 {doc.metadata.get('source', 'Document')}:\n{doc.page_content}" for doc in rag_docs])
+                                                st.success(f"✅ {len(rag_docs)} passages trouvés")
+                                                # Afficher un aperçu
+                                                for i, doc in enumerate(rag_docs[:3], 1):
+                                                    st.markdown(f"**Document {i}:** `{doc.metadata.get('source', 'Inconnu')}`")
+                                            else:
+                                                st.info("❌")
+                                    elif pdf_tool_used and not st.session_state.vectordb:
+                                        st.warning("⚠️ Outil PDF détecté mais aucune base vectorielle chargée. Ajoutez des PDFs dans l'onglet Configuration.")
+                                    
+                                    # Exécution des autres outils avec affichage détaillé dans le chat
+                                    tool_results = []
+                                    for tool in selected_tools:
+                                        if 'pdf' not in tool.name.lower() and 'document' not in tool.name.lower():
+                                            try:
+                                                with chat_container:
+                                                    with st.expander(f"⚙️ Exécution: {tool.name}", expanded=True):
+                                                        st.info(f"🔄 {tool.description}")
+                                                        result = tool.execute(prompt, tool_context)
+                                                        
+                                                        # Affichage élégant du résultat
+                                                        st.markdown(f"""
+                                                        <div style="
+                                                            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                                                            padding: 15px;
+                                                            border-radius: 10px;
+                                                            border-left: 4px solid #00ff88;
+                                                            margin: 10px 0;
+                                                        ">
+                                                            <h4 style="color: #00ff88; margin: 0 0 10px 0;">✅ Résultat</h4>
+                                                            <pre style="color: #f0f0f0; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; overflow-x: auto; font-size: 0.9rem;">{str(result)[:500]}</pre>
+                                                        </div>
+                                                        """, unsafe_allow_html=True)
+                                                tool_results.append(f"**{tool.name}:** {result}")
+                                            except Exception as e:
+                                                with chat_container:
+                                                    st.error(f"❌ Erreur {tool.name}: {str(e)}")
+                                                tool_results.append(f"**{tool.name} (erreur):** {str(e)}")
+                                    
+                                    # Recherche web avec toutes les capacités (TOUJOURS ACTIVÉE)
+                                    web_context = ""
+                                    web_media_html = ""
+                                    if web_enabled:
                                         try:
-                                            with chat_container:
-                                                with st.expander(f"⚙️ Exécution: {tool.name}", expanded=True):
-                                                    st.info(f"🔄 {tool.description}")
-                                                    result = tool.execute(prompt, tool_context)
-                                                    
-                                                    # Affichage élégant du résultat
-                                                    st.markdown(f"""
-                                                    <div style="
-                                                        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-                                                        padding: 15px;
-                                                        border-radius: 10px;
-                                                        border-left: 4px solid #00ff88;
-                                                        margin: 10px 0;
-                                                    ">
-                                                        <h4 style="color: #00ff88; margin: 0 0 10px 0;">✅ Résultat</h4>
-                                                        <pre style="color: #f0f0f0; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; overflow-x: auto; font-size: 0.9rem;">{str(result)[:500]}</pre>
-                                                    </div>
-                                                    """, unsafe_allow_html=True)
-                                            tool_results.append(f"**{tool.name}:** {result}")
+                                            web_results = enhanced_web_search(prompt, max_results=3)
+                                            if web_results:
+                                                web_context = "\n".join([f"{r.get('title', '')[:50]}: {r.get('body', '')[:100]}" for r in web_results[:2]])
+                                                # Générer le HTML avec médias
+                                                web_media_html = format_web_results_with_media(web_results, max_results=3)
                                         except Exception as e:
-                                            with chat_container:
-                                                st.error(f"❌ Erreur {tool.name}: {str(e)}")
-                                            tool_results.append(f"**{tool.name} (erreur):** {str(e)}")
-                                
-                                # Recherche web avec toutes les capacités (TOUJOURS ACTIVÉE)
-                                web_context = ""
-                                web_media_html = ""
-                                if web_enabled:
-                                    try:
-                                        web_results = enhanced_web_search(prompt, max_results=3)
-                                        if web_results:
-                                            web_context = "\n".join([f"{r.get('title', '')[:50]}: {r.get('body', '')[:100]}" for r in web_results[:2]])
-                                            # Générer le HTML avec médias
-                                            web_media_html = format_web_results_with_media(web_results, max_results=3)
-                                    except Exception as e:
-                                        web_context = f"Erreur recherche web: {e}"
-                                
-                                # Construction du prompt final avec TOUTES les sources (médias EN PREMIER)
-                                full_context = ""
-                                has_media_context = bool(st.session_state.media_analysis_results)
-                                
-                                # 1. MÉDIAS UPLOADÉS (SI DISPONIBLES) - CONTEXTE PRIORITAIRE
-                                if st.session_state.media_analysis_results:
-                                    full_context += "═══════════════════════════════════════\n"
-                                    full_context += "🎯 IMPORTANT: L'utilisateur a uploadé des médias que VOUS POUVEZ ANALYSER.\n"
-                                    full_context += "Les données ci-dessous sont l'ÉQUIVALENT de votre 'vision' de ces médias.\n"
-                                    full_context += "Utilisez ces informations pour analyser EN PROFONDEUR le contenu spécifique.\n"
-                                    full_context += "═══════════════════════════════════════\n\n"
-                                    full_context += "📎 **MÉDIAS DISPONIBLES POUR ANALYSE:**\n\n"
+                                            web_context = f"Erreur recherche web: {e}"
                                     
-                                    # Inclure TOUS les médias avec ANALYSE COMPLÈTE
-                                    for media in st.session_state.media_analysis_results:
-                                        if media['type'] == 'image':
-                                            full_context += f"🖼️ **Image: {media['name']}**\n"
-                                            full_context += f"📏 Résolution: {media.get('resolution', 'N/A')} | Format: {media.get('format', 'N/A')}\n\n"
-                                            
-                                            # Inclure l'ANALYSE IA COMPLÈTE (pas de troncature)
-                                            if 'ai_analysis' in media:
-                                                full_context += f"🤖 **DONNÉES D'ANALYSE VISUELLE (CLIP + OCR + Détails):**\n{media['ai_analysis']}\n\n"
-                                            
-                                            if 'caption' in media:
-                                                full_context += f"📝 **Description sémantique:** {media['caption']}\n\n"
-                                            
-                                            if 'ocr_text' in media and media['ocr_text']:
-                                                full_context += f"📝 **Texte détecté (OCR):**\n{media['ocr_text']}\n\n"
-                                        
-                                        elif media['type'] == 'audio':
-                                            full_context += f"🎵 **Audio: {media['name']}**\n"
-                                            full_context += f"⏱️ Durée: {media.get('duration', 0):.2f}s | Fréquence: {media.get('sample_rate', 'N/A')} Hz\n\n"
-                                        
-                                        elif media['type'] == 'video':
-                                            full_context += f"🎥 **Vidéo: {media['name']}**\n"
-                                            full_context += f"⏱️ Durée: {media.get('duration', 0):.2f}s | Résolution: {media.get('resolution', 'N/A')} | FPS: {media.get('fps', 'N/A')}\n\n"
+                                    # Construction du prompt final avec TOUTES les sources
+                                    # IMPORTANT: enriched_prompt contient déjà le contexte binaire OU média OU conversation
+                                    # On doit le préserver et y ajouter les autres sources
+                                    full_context = ""
+                                    has_binary_context = 'binary_files' in st.session_state and st.session_state.binary_files
+                                    has_media_in_enriched = 'MÉDIAS ANALYSÉS' in str(enriched_prompt) or 'Image:' in str(enriched_prompt)
                                     
-                                    full_context += "═══════════════════════════════════════\n\n"
-                                
-                                # 2. DOCUMENTS LOCAUX (RAG)
-                                if rag_context:
-                                    full_context += f"📚 **Documents locaux:**\n{rag_context[:400]}\n\n"
-                                
-                                # 3. RÉSULTATS DES OUTILS
-                                if tool_results:
-                                    limited_results = [r[:300] for r in tool_results[:2]]
-                                    for tr in limited_results:
-                                        full_context += f"🔧 **Outil:** {tr}\n\n"
-                                
-                                # 4. RECHERCHE WEB (POUR CONTEXTE ADDITIONNEL)
-                                if web_context:
-                                    full_context += f"🌐 **Contexte web complémentaire:**\n{web_context[:300]}\n\n"
-                                
-                                # Prompt final intelligent qui s'adapte au contexte
-                                if has_media_context:
-                                    final_prompt = f"""{full_context}
+                                    # Si on a déjà un contexte enrichi (binaire/média/conversation), on le met en premier
+                                    if has_binary_context or has_media_in_enriched:
+                                        full_context = str(enriched_prompt) + "\n\n"
+                                        full_context += "═══════════════════════════════════════════════════════════════════════════════\n"
+                                        full_context += "📚 SOURCES COMPLÉMENTAIRES (À UTILISER SI PERTINENT):\n"
+                                        full_context += "═══════════════════════════════════════════════════════════════════════════════\n\n"
+                                    
+                                    # 1. DOCUMENTS LOCAUX (RAG)
+                                    if rag_context:
+                                        full_context += f"📚 **Documents locaux:**\n{rag_context[:400]}\n\n"
+                                    
+                                    # 2. RÉSULTATS DES OUTILS
+                                    if tool_results:
+                                        limited_results = [r[:300] for r in tool_results[:2]]
+                                        for tr in limited_results:
+                                            full_context += f"🔧 **Outil:** {tr}\n\n"
+                                    
+                                    # 4. RECHERCHE WEB (POUR CONTEXTE ADDITIONNEL)
+                                    if web_context:
+                                        full_context += f"🌐 **Contexte web complémentaire:**\n{web_context[:300]}\n\n"
+                                    
+                                    # Prompt final intelligent qui s'adapte au contexte
+                                    if has_binary_context:
+                                        # Mode analyse de fichier binaire
+                                        final_prompt = f"""{full_context}
+
+💡 **CONSIGNE STRICTE:** Vous analysez un FICHIER SPÉCIFIQUE uploadé par l'utilisateur.
+- ✅ Analysez CE FICHIER CONCRET en utilisant les données réelles ci-dessus
+- ✅ Citez les chaînes de texte extraites, les offsets, les magic bytes
+- ✅ Commencez votre réponse par "Ce fichier {st.session_state.binary_files[-1]['name']}..."
+- ❌ N'expliquez PAS ce qu'est un fichier en général
+- ❌ Ne donnez PAS de cours théorique
+- ❌ Ne parlez PAS de concepts généraux
+
+Répondez UNIQUEMENT en analysant les DONNÉES CONCRÈTES du fichier ci-dessus."""
+                                    elif has_media_in_enriched:
+                                        final_prompt = f"""{full_context}
 ❓ **QUESTION:** {prompt}
 
 💡 **CONSIGNE:** Vous avez accès aux données d'analyse des médias ci-dessus. Analysez-les EN PROFONDEUR en utilisant:
@@ -6105,77 +8003,63 @@ QUESTION UTILISATEUR: {prompt}"""
 - Le contexte web si pertinent (pour approfondir)
 
 Répondez de manière détaillée et technique en exploitant TOUTES les données disponibles."""
-                                else:
-                                    final_prompt = f"""{full_context}
+                                    else:
+                                        final_prompt = f"""{full_context}
 ❓ **QUESTION:** {prompt}
 
 Réponds en utilisant toutes les sources disponibles (documents, outils, web) pour une réponse complète."""
-                                
-                                # Génération de la réponse finale avec historique adapté ET STREAMING
-                                client = create_client()
-                                has_media_context = bool(st.session_state.media_analysis_results)
-                                
-                                # Adapter les limites selon le contexte
-                                if has_media_context:
-                                    # Si médias: garder moins d'historique mais plus de contexte média
-                                    recent_msgs = st.session_state.chat_history[-1:] if st.session_state.chat_history else []
-                                    messages = recent_msgs + [{"role": "user", "content": final_prompt[:5000]}]  # 5000 chars pour l'analyse complète
-                                    max_tokens_response = 1000  # Réponse détaillée pour l'analyse
-                                else:
-                                    # Mode normal : historique standard
-                                    recent_msgs = st.session_state.chat_history[-2:] if len(st.session_state.chat_history) > 2 else st.session_state.chat_history
-                                    messages = recent_msgs + [{"role": "user", "content": final_prompt[:2000]}]
-                                    max_tokens_response = 600
-                                
-                                # 🌊 STREAMING ACTIVÉ - Affichage progressif des tokens
-                                with chat_container:
-                                    with st.chat_message("assistant"):
-                                        message_placeholder = st.empty()
-                                        full_response = ""
+                                    
+                                    # Génération de la réponse finale avec historique adapté ET STREAMING
+                                    client = create_client()
+                                    has_media_context = bool(st.session_state.media_analysis_results)
+                                    has_binary_context = 'binary_files' in st.session_state and st.session_state.binary_files
+                                    
+                                    # Adapter les limites selon le contexte
+                                    if has_binary_context or has_media_context:
+                                        # Si fichiers binaires ou médias: garder PLUS d'historique pour le contexte de conversation
+                                        # Garder les 5 derniers messages pour suivre le fil de la conversation
+                                        recent_msgs = st.session_state.chat_history[-5:] if len(st.session_state.chat_history) >= 5 else st.session_state.chat_history
                                         
-                                        # Créer le stream
-                                        stream = client.chat.completions.create(
-                                            model=WORKING_MODELS[model_choice],
-                                            messages=messages,
-                                            max_tokens=max_tokens_response,
-                                            temperature=0.3,
-                                            stream=True  # 🔥 ACTIVER LE STREAMING
-                                        )
+                                        # Filtrer pour garder seulement user/assistant (pas les HTML)
+                                        recent_msgs = [m for m in recent_msgs if m.get('role') in ['user', 'assistant']]
                                         
-                                        # Afficher chaque token au fur et à mesure
-                                        for chunk in stream:
-                                            if chunk.choices[0].delta.content is not None:
-                                                full_response += chunk.choices[0].delta.content
-                                                message_placeholder.markdown(full_response + "▌")
-                                        
-                                        # Affichage final sans curseur
-                                        message_placeholder.markdown(full_response)
-                                
-                                response = full_response
-                                
-                            else:
-                                # Aucun outil spécifique trouvé, utiliser l'approche classique avec STREAMING
-                                with chat_container:
-                                    with st.chat_message("assistant"):
-                                        message_placeholder = st.empty()
-                                        full_response = ""
-                                        
-                                        if not web_enabled:
-                                            docs = rag_search(prompt, st.session_state.vectordb, k=3)
-                                        else:
-                                            docs = hybrid_search_enhanced(prompt, st.session_state.vectordb, k=3, web_search_enabled=True)
-                                        
-                                        # 🌊 Streaming des chunks
-                                        for chunk in generate_answer_enhanced_stream(
-                                            prompt, docs, WORKING_MODELS[model_choice], include_sources=True
-                                        ):
-                                            full_response += chunk
-                                            message_placeholder.markdown(full_response + "▌")
-                                        
-                                        # Affichage final
-                                        message_placeholder.markdown(full_response)
-                                
-                                response = full_response
+                                        messages = recent_msgs + [{"role": "user", "content": final_prompt[:12000]}]  # 12000 chars pour contexte très riche
+                                        max_tokens_response = 4000  # 4000 tokens pour réponses très détaillées (≈60-80 lignes, 2-3 pages)
+                                    else:
+                                        # Mode normal : historique standard
+                                        recent_msgs = st.session_state.chat_history[-4:] if len(st.session_state.chat_history) > 4 else st.session_state.chat_history
+                                        recent_msgs = [m for m in recent_msgs if m.get('role') in ['user', 'assistant']]
+                                        messages = recent_msgs + [{"role": "user", "content": final_prompt[:5000]}]
+                                        max_tokens_response = 2000  # 2000 tokens pour réponses standard détaillées
+                                    
+                                    # 🌊 STREAMING ACTIVÉ - Affichage progressif des tokens
+                                    with chat_container:
+                                        with st.chat_message("assistant"):
+                                            message_placeholder = st.empty()
+                                            full_response = ""
+                                            
+                                            # Créer le stream
+                                            stream = client.chat.completions.create(
+                                                model=WORKING_MODELS[model_choice],
+                                                messages=messages,
+                                                max_tokens=max_tokens_response,
+                                                temperature=0.7 if has_binary_context or has_media_context else 0.5,  # Plus créatif pour analyses
+                                                stream=True  # 🔥 ACTIVER LE STREAMING
+                                            )
+                                            
+                                            # Afficher chaque token au fur et à mesure
+                                            for chunk in stream:
+                                                if chunk.choices[0].delta.content is not None:
+                                                    full_response += chunk.choices[0].delta.content
+                                                    message_placeholder.markdown(full_response + "▌")
+                                            
+                                            # 🧹 NETTOYER LA RÉPONSE FINALE
+                                            full_response = clean_response_text(full_response)
+                                            
+                                            # Affichage final sans curseur
+                                            message_placeholder.markdown(full_response)
+                                    
+                                    response = full_response
                         
                         except Exception as e:
                             st.error(f"Erreur système d'outils: {e}")
@@ -6186,17 +8070,19 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                                     full_response = ""
                                     
                                     if not web_enabled:
-                                        docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                        docs = rag_search(enriched_prompt if ('binary_files' in st.session_state and st.session_state.binary_files) else prompt, st.session_state.vectordb, k=3)
                                     else:
-                                        docs = hybrid_search_enhanced(prompt, st.session_state.vectordb, k=3, web_search_enabled=True)
+                                        docs = hybrid_search_enhanced(enriched_prompt if ('binary_files' in st.session_state and st.session_state.binary_files) else prompt, st.session_state.vectordb, k=3, web_search_enabled=True)
                                     
                                     # 🌊 Streaming des chunks
                                     for chunk in generate_answer_enhanced_stream(
-                                        prompt, docs, WORKING_MODELS[model_choice], include_sources=True
+                                        enriched_prompt if ('binary_files' in st.session_state and st.session_state.binary_files) else prompt, docs, WORKING_MODELS[model_choice], include_sources=True
                                     ):
                                         full_response += chunk
                                         message_placeholder.markdown(full_response + "▌")
                                     
+                                    # 🧹 Nettoyer la réponse
+                                    full_response = clean_response_text(full_response)
                                     message_placeholder.markdown(full_response)
                             
                             response = full_response
@@ -6221,11 +8107,12 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                                         message_placeholder = st.empty()
                                         full_response = ""
                                         
-                                        docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                        # Utiliser enriched_prompt pour avoir le contexte binaire
+                                        docs = rag_search(enriched_prompt if ('binary_files' in st.session_state and st.session_state.binary_files) else prompt, st.session_state.vectordb, k=3)
                                         
                                         # 🌊 Streaming
                                         for chunk in generate_answer_enhanced_stream(
-                                            prompt, docs, st.session_state.current_model, include_sources=True
+                                            enriched_prompt if ('binary_files' in st.session_state and st.session_state.binary_files) else prompt, docs, st.session_state.current_model, include_sources=True
                                         ):
                                             full_response += chunk
                                             message_placeholder.markdown(full_response + "▌")
@@ -6241,7 +8128,11 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                                         web_media_html = format_web_results_with_media(web_results, max_results=3)
                                 except:
                                     pass
-                                response = st.session_state.agent.run(prompt)
+                                # Utiliser enriched_prompt si fichier binaire disponible
+                                if 'binary_files' in st.session_state and st.session_state.binary_files:
+                                    response = st.session_state.agent.run(enriched_prompt)
+                                else:
+                                    response = st.session_state.agent.run(prompt)
                         except Exception as e:
                             response = f"❌ Erreur: {e}\n\nTentative avec recherche locale..."
                             try:
@@ -6250,10 +8141,12 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                                         message_placeholder = st.empty()
                                         full_response = ""
                                         
-                                        docs = rag_search(prompt, st.session_state.vectordb, k=3)
+                                        # Utiliser enriched_prompt pour le contexte binaire
+                                        query = enriched_prompt if ('binary_files' in st.session_state and st.session_state.binary_files) else prompt
+                                        docs = rag_search(query, st.session_state.vectordb, k=3)
                                         
                                         for chunk in generate_answer_enhanced_stream(
-                                            prompt, docs, st.session_state.current_model
+                                            query, docs, st.session_state.current_model
                                         ):
                                             full_response += chunk
                                             message_placeholder.markdown(full_response + "▌")
@@ -6280,6 +8173,13 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                 )
             except Exception as e:
                 print(f"⚠️ Erreur sauvegarde mémoire: {e}")
+            
+            # 🤖 AUTO-APPRENTISSAGE: Apprendre de la conversation
+            if AUTO_LEARNING_AVAILABLE and st.session_state.get('auto_learning'):
+                try:
+                    st.session_state.auto_learning.learn_from_conversation(prompt, response)
+                except Exception as e:
+                    print(f"⚠️ Erreur apprentissage conversation: {e}")
             
             # Nettoyer l'historique si trop long
             if len(st.session_state.chat_history) > 20:
@@ -6440,10 +8340,10 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
         
         st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
         uploaded_image = st.file_uploader(
-            "📤 **Upload Image**", 
-            type=["jpg", "png", "jpeg"],
+            "📤 **Upload Fichier**", 
+            type=None,
             key="image_upload",
-            help="Formats supportés: JPG, PNG, JPEG"
+            help="Tous formats acceptés - binaires inclus"
         )
         st.markdown('</div>', unsafe_allow_html=True)
         
@@ -6690,13 +8590,13 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
         
         # Section d'upload multiple
         st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
-        st.markdown("#### 📤 Upload de photos")
+        st.markdown("#### 📤 Upload de fichiers")
         
         uploaded_photos = st.file_uploader(
-            "Sélectionnez vos photos de photogrammétrie",
-            type=['jpg', 'jpeg', 'png', 'bmp', 'tiff', 'tif'],
+            "Sélectionnez vos fichiers",
+            type=None,
             accept_multiple_files=True,
-            help="Uploadez toutes vos photos. L'IA les analysera et les classera intelligemment!",
+            help="Uploadez tous vos fichiers (tous formats acceptés). L'IA les analysera et les classera intelligemment!",
             key="photo_upload_classifier"
         )
         
@@ -7523,8 +9423,8 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
     # ===============================================
     # Onglet 7: Outils Dynamiques (si disponible)
     # ===============================================
-    if TOOLS_SYSTEM_AVAILABLE and st.session_state.tool_manager and len(tabs) > 6:
-        with tab6:
+    if TOOLS_SYSTEM_AVAILABLE and st.session_state.tool_manager and tab_tools:
+        with tab_tools:
             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
             st.markdown("""
             ### 🔧 Système d'outils dynamiques
@@ -7871,6 +9771,121 @@ class KibaliAPI:
         return get_system_status()
 # Instance globale de l'API
 kibali_api = KibaliAPI()
+
+# ===============================================
+# Onglet Nano-IA et Auto-Apprentissage
+# ===============================================
+if AUTO_LEARNING_AVAILABLE and tab_nano_ai:
+    with tab_nano_ai:
+        st.markdown("## 🤖 Nano-IA & Système d'Auto-Apprentissage")
+        
+        # Toggle pour activer/désactiver l'apprentissage
+        if st.session_state.get('auto_learning'):
+            st.session_state.auto_learning.render_learning_toggle()
+        
+        st.markdown("---")
+        
+        # Statistiques d'apprentissage
+        if st.session_state.get('auto_learning'):
+            st.session_state.auto_learning.render_learning_stats()
+        
+        st.markdown("---")
+        
+        # Gestion des domaines
+        st.markdown("### 📚 Domaines d'Expertise")
+        
+        if st.session_state.get('knowledge_manager'):
+            km = st.session_state.knowledge_manager
+            domains = km.list_domains()
+            
+            if domains:
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    selected_domain = st.selectbox(
+                        "Sélectionner un domaine",
+                        domains,
+                        help="Choisissez un domaine pour voir les détails"
+                    )
+                
+                with col2:
+                    if st.button("🤖 Créer/Mettre à jour Nano-IA", help="Crée ou met à jour la nano-IA spécialisée"):
+                        with st.spinner(f"Création de la nano-IA pour {selected_domain}..."):
+                            if km.create_nano_ai(selected_domain, force=True):
+                                st.success(f"✅ Nano-IA {selected_domain} créée!")
+                                st.rerun()
+                
+                # Détails du domaine
+                if selected_domain:
+                    expertise = km.get_domain_expertise(selected_domain)
+                    if expertise:
+                        st.markdown(f"""
+                        <div style='
+                            background: linear-gradient(135deg, rgba(0, 136, 255, 0.1), rgba(138, 43, 226, 0.1));
+                            padding: 1.5rem;
+                            border-radius: 10px;
+                            border: 2px solid rgba(0, 136, 255, 0.3);
+                            margin: 1rem 0;
+                        '>
+                            <h4 style='color: #0088ff; margin-top: 0;'>📊 {selected_domain}</h4>
+                            <p><strong>Documents:</strong> {expertise.documents_count}</p>
+                            <p><strong>Requêtes traitées:</strong> {expertise.queries_handled}</p>
+                            <p><strong>Taux de succès:</strong> {expertise.success_rate*100:.1f}%</p>
+                            <p><strong>Créé:</strong> {expertise.creation_date[:10]}</p>
+                            <p><strong>Dernière MAJ:</strong> {expertise.last_updated[:10]}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Mots-clés
+                        if expertise.keywords:
+                            st.markdown("**🔑 Mots-clés maîtrisés:**")
+                            st.write(", ".join(expertise.keywords[:20]))
+                        
+                        # Exemples Q&A
+                        if expertise.examples:
+                            st.markdown("**💬 Exemples de conversations:**")
+                            for i, example in enumerate(expertise.examples[-5:], 1):
+                                with st.expander(f"Exemple {i}: {example['query'][:50]}..."):
+                                    st.markdown(f"**Question:** {example['query']}")
+                                    st.markdown(f"**Réponse:** {example['response'][:300]}...")
+                        
+                        # Test du domaine
+                        st.markdown("---")
+                        st.markdown("### 🧪 Tester les connaissances du domaine")
+                        test_query = st.text_input(
+                            "Posez une question sur ce domaine",
+                            placeholder=f"Ex: Qu'as-tu appris sur {selected_domain}?",
+                            key=f"test_query_{selected_domain}"
+                        )
+                        
+                        if test_query:
+                            with st.spinner("Recherche dans les connaissances..."):
+                                results = km.query_domain(test_query, selected_domain, k=3)
+                                
+                                if results:
+                                    st.success(f"✅ {len(results)} résultats trouvés!")
+                                    for i, doc in enumerate(results, 1):
+                                        with st.expander(f"Résultat {i}"):
+                                            st.write(doc.page_content[:500])
+                                            st.caption(f"Source: {doc.metadata.get('filename', 'N/A')}")
+                                else:
+                                    st.warning("Aucun résultat trouvé dans ce domaine")
+            else:
+                st.info("👋 Aucun domaine d'expertise créé pour le moment. Uploadez des fichiers pour commencer l'apprentissage!")
+        
+        # Historique d'apprentissage
+        st.markdown("---")
+        st.markdown("### 📜 Historique d'Apprentissage")
+        
+        if st.session_state.get('learning_history'):
+            history_df = pd.DataFrame(st.session_state.learning_history[-20:])
+            st.dataframe(
+                history_df[['type', 'source', 'domain']],
+                use_container_width=True
+            )
+        else:
+            st.info("L'historique d'apprentissage apparaîtra ici au fur et à mesure")
+
 # ===============================================
 # Messages de fin et documentation
 # ===============================================
@@ -7882,6 +9897,8 @@ print(f"🔑 Token HF: {'✅ Configuré' if HF_TOKEN else '❌ Manquant'}")
 print(f"📁 Dossier: {CHATBOT_DIR}")
 print(f"🌐 Recherche web: ✅ Activée")
 print(f"💾 Cache intelligent: ✅ Activé")
+if AUTO_LEARNING_AVAILABLE:
+    print(f"🤖 Auto-apprentissage: ✅ Activé")
 print("\n📚 FONCTIONNALITÉS PRINCIPALES:")
 print(" 💬 Chat RAG avec recherche web intelligent")
 print(" 🗺️ Calcul de trajets OSM")
