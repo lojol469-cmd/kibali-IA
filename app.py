@@ -5697,6 +5697,7 @@ def main():
                             image_caption = ""
                             analysis_details = []
                             extracted_text_info = ""
+                            extracted_texts_raw = []  # Stocker les textes bruts
                             
                             # Extraction du texte avec OCR
                             extracted_text_keywords = []
@@ -5704,6 +5705,7 @@ def main():
                                 st.info("📝 Extraction OCR en cours...")
                                 extracted_texts = extract_text_from_image(tmp_path, st.session_state.ocr_reader)
                                 if extracted_texts:
+                                    extracted_texts_raw = extracted_texts  # Sauvegarder les textes bruts
                                     extracted_text_info = organize_extracted_text(extracted_texts)
                                     # Extraire mots-clés pour recherche web
                                     import re
@@ -5823,50 +5825,156 @@ Réponds en 3-5 phrases ULTRA-DÉTAILLÉES incluant: type d'image, couleurs pré
                                 
                                 enriched_analysis = analysis_response.choices[0].message.content
                                 
-                                # Préparer l'affichage ULTRA-COMPLET
-                                analysis_display = f"**🖼️ Analyse Ultra-Détaillée de {img_file.name}**\n\n"
-                                analysis_display += f"📏 Résolution: {width}x{height}px | Format: {img_format}\n\n"
-                                
-                                # Extraire la lettre de la description CLIP SEULEMENT si confiance > 40%
-                                import re
-                                letter_match = re.search(r"lettre '([A-Z])' \(confiance: ([\d.]+)%\)", image_caption)
-                                if letter_match:
-                                    detected_letter = letter_match.group(1)
-                                    letter_confidence = float(letter_match.group(2))
-                                    # Afficher SEULEMENT si confiance > 40%
-                                    if letter_confidence > 40.0:
-                                        analysis_display += f"## 🔤 LETTRE DÉTECTÉE: **{detected_letter}** ({letter_confidence:.1f}%)\n\n"
-                                
-                                # Description CLIP détaillée (50 prompts) avec COULEURS SÉPARÉES
-                                # Extraire les couleurs du clip_result
+                                # Extraire les informations du clip_result AVANT de les utiliser
                                 colors_detailed = clip_result.get('colors', 'N/A')
-                                main_type_only = clip_result.get('main_type', image_caption)
+                                main_type_only = clip_result.get('main_type', image_caption if image_caption else 'document image')
                                 
-                                analysis_display += f"## 🤖 Description IA (CLIP 50 prompts):\n\n**{main_type_only}**\n\n"
-                                analysis_display += f"## 🎨 Couleurs détectées (TOP 3):\n\n**{colors_detailed}**\n\n"
+                                # Préparer l'affichage ULTRA-COMPLET
+                                analysis_display = f"# 📄 Transcription et Analyse: {img_file.name}\n\n"
+                                analysis_display += f"📏 **Dimensions:** {width}x{height}px | **Format:** {img_format}\n\n"
+                                analysis_display += "---\n\n"
                                 
-                                # Ajouter le texte OCR si disponible
-                                if extracted_text_info and "Aucun texte" not in extracted_text_info:
-                                    text_words = re.findall(r'✅.*?\]\s*(.*?)$', extracted_text_info, re.MULTILINE)
-                                    if text_words:
-                                        unique_words = list(set([w.strip() for w in text_words if len(w.strip()) > 1]))
-                                        if unique_words:
-                                            analysis_display += f"## 📝 Texte OCR: **{', '.join(unique_words[:10])}**\n\n"
+                                # ═══════════════════════════════════════════════════════
+                                # SECTION 1: TRANSCRIPTION TEXTUELLE EXACTE
+                                # ═══════════════════════════════════════════════════════
+                                analysis_display += "## 📝 TRANSCRIPTION TEXTUELLE COMPLÈTE\n\n"
+                                analysis_display += "*Reproduction exacte du texte visible dans l'image:*\n\n"
                                 
-                                # Ajouter YOLO si disponible
+                                # Utiliser extracted_texts_raw (les données brutes) directement
+                                if extracted_texts_raw and len(extracted_texts_raw) > 0:
+                                    analysis_display += "```\n"
+                                    for text_item in extracted_texts_raw:
+                                        # Extraire le texte selon le format (dict ou tuple)
+                                        if isinstance(text_item, dict):
+                                            text_content = text_item.get('text', '')
+                                        elif isinstance(text_item, tuple) and len(text_item) > 1:
+                                            text_content = text_item[1]  # (bbox, text, conf)
+                                        else:
+                                            text_content = str(text_item)
+                                        
+                                        if text_content and text_content.strip():
+                                            analysis_display += f"{text_content.strip()}\n"
+                                    analysis_display += "```\n\n"
+                                elif extracted_text_info and "Aucun texte" not in extracted_text_info:
+                                    # Fallback: utiliser extracted_text_info avec regex
+                                    text_lines = re.findall(r'✅\s*\[Conf:\s*[\d.]+%\]\s*(.+?)$', extracted_text_info, re.MULTILINE)
+                                    
+                                    if text_lines:
+                                        cleaned_lines = [line.strip() for line in text_lines if line.strip()]
+                                        if cleaned_lines:
+                                            analysis_display += "```\n"
+                                            for line in cleaned_lines:
+                                                analysis_display += f"{line}\n"
+                                            analysis_display += "```\n\n"
+                                    else:
+                                        analysis_display += "*Aucun texte détecté dans l'image*\n\n"
+                                else:
+                                    analysis_display += "*Aucun texte détecté dans l'image*\n\n"
+                                
+                                analysis_display += "---\n\n"
+                                
+                                # ═══════════════════════════════════════════════════════
+                                # SECTION 2: SYNTHÈSE INTELLIGENTE DÉTAILLÉE
+                                # ═══════════════════════════════════════════════════════
+                                analysis_display += "## 💡 SYNTHÈSE SIMPLE\n\n"
+                                
+                                # Construire une synthèse basique sans IA complexe
+                                synthese_simple = f"**Type d'image:** {main_type_only}\n\n"
+                                
+                                # Utiliser extracted_texts_raw pour compter
+                                if extracted_texts_raw and len(extracted_texts_raw) > 0:
+                                    nb_lignes = len(extracted_texts_raw)
+                                    
+                                    # Extraire tous les textes pour les mots-clés
+                                    all_text = []
+                                    for text_item in extracted_texts_raw:
+                                        if isinstance(text_item, dict):
+                                            text_content = text_item.get('text', '')
+                                        elif isinstance(text_item, tuple) and len(text_item) > 1:
+                                            text_content = text_item[1]
+                                        else:
+                                            text_content = str(text_item)
+                                        if text_content:
+                                            all_text.append(text_content)
+                                    
+                                    # Extraire mots-clés uniques
+                                    all_words = ' '.join(all_text).split()
+                                    unique_words = list(set([w.strip('.,;:()[]{}') for w in all_words if len(w.strip('.,;:()[]{}')) > 2]))
+                                    
+                                    synthese_simple += f"**Contenu textuel:** {nb_lignes} éléments de texte détectés\n\n"
+                                    
+                                    if unique_words:
+                                        synthese_simple += f"**Termes-clés:** {', '.join(sorted(unique_words)[:15])}\n\n"
+                                else:
+                                    synthese_simple += "**Contenu:** Image sans texte détectable\n\n"
+                                
+                                # Couleurs
+                                colors_detailed = clip_result.get('colors', 'N/A')
+                                if colors_detailed and colors_detailed != 'N/A':
+                                    synthese_simple += f"**Couleurs dominantes:** {colors_detailed}\n\n"
+                                
+                                # Objets détectés
                                 if yolo_detections:
-                                    yolo_top = sorted(yolo_detections, key=lambda x: x['confidence'], reverse=True)[:5]
-                                    yolo_str = ", ".join([f"{d['class']} ({d['confidence']:.0%})" for d in yolo_top])
-                                    analysis_display += f"## 🎯 Objets YOLO détectés: **{yolo_str}**\n\n"
+                                    yolo_top = sorted(yolo_detections, key=lambda x: x['confidence'], reverse=True)[:3]
+                                    objets = ', '.join([obj['class'] for obj in yolo_top])
+                                    synthese_simple += f"**Éléments visuels:** {objets}\n\n"
                                 
-                                # Ajouter résultats web si disponibles
-                                if web_results_text:
-                                    analysis_display += f"## 🌐 Informations Web ({len(web_results_text)} sources):\n\n"
-                                    for idx, res in enumerate(web_results_text[:3], 1):
-                                        analysis_display += f"**{idx}.** {res.get('title', 'Sans titre')[:80]}\n"
-                                        analysis_display += f"   _{res.get('body', '')[:150]}..._\n\n"
+                                analysis_display += synthese_simple
                                 
-                                analysis_display += f"## 🧠 Synthèse Intelligence Artificielle:\n\n{enriched_analysis}"
+                                # ═══════════════════════════════════════════════════════
+                                # SECTION 3: ANALYSE INTELLIGENTE PAR IA (ENRICHIE)
+                                # ═══════════════════════════════════════════════════════
+                                analysis_display += "---\n\n"
+                                analysis_display += f"## 🧠 ANALYSE INTELLIGENTE PAR IA\n\n"
+                                
+                                # Préparer un prompt enrichi pour l'analyse contextuelle
+                                if extracted_texts_raw and len(extracted_texts_raw) > 0:
+                                    # Construire le contexte textuel complet
+                                    full_text_context = "\n".join([
+                                        text_item.get('text', '') if isinstance(text_item, dict) 
+                                        else text_item[1] if isinstance(text_item, tuple) and len(text_item) > 1
+                                        else str(text_item)
+                                        for text_item in extracted_texts_raw
+                                    ])
+                                    
+                                    # Créer un prompt d'analyse contextuelle
+                                    contextual_prompt = f"""Analyse ce contenu textuel extrait d'une image et explique en détail ce qu'il représente:
+
+TEXTE EXTRAIT:
+{full_text_context[:1500]}
+
+CONTEXTE VISUEL:
+- Type d'image: {main_type_only}
+- Couleurs: {colors_detailed}
+{f"- Objets détectés: {', '.join([obj['class'] for obj in yolo_detections[:3]])}" if yolo_detections else ""}
+
+INSTRUCTIONS:
+1. Identifie le TYPE de document/interface (capture d'écran, interface Docker, logs, code, etc.)
+2. Explique LA FONCTION et le CONTEXTE de ce qui est affiché
+3. Décris les ÉLÉMENTS CLÉS et leur signification
+4. Donne des INSIGHTS techniques si c'est un document technique
+5. Résume en 4-6 phrases claires et précises
+
+Réponds de manière structurée et professionnelle:"""
+
+                                    # Appeler l'IA pour une analyse contextuelle
+                                    try:
+                                        text_client = create_client()
+                                        contextual_response = text_client.chat.completions.create(
+                                            model=WORKING_MODELS[model_choice],
+                                            messages=[{"role": "user", "content": contextual_prompt[:2000]}],
+                                            max_tokens=800,
+                                            temperature=0.3
+                                        )
+                                        
+                                        intelligent_analysis = contextual_response.choices[0].message.content
+                                        analysis_display += f"{intelligent_analysis}\n\n"
+                                    except:
+                                        # Fallback sur l'analyse basique
+                                        analysis_display += f"{enriched_analysis}\n\n"
+                                else:
+                                    # Pas de texte, utiliser l'analyse visuelle
+                                    analysis_display += f"{enriched_analysis}\n\n"
                                 
                                 # Ajouter l'analyse au chat (markdown pur sans HTML visible)
                                 st.session_state.chat_history.append({
