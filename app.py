@@ -5315,23 +5315,24 @@ QUESTION ACTUELLE: {prompt}"""
             explicit_pdf_request = False
             if PDF_GENERATOR_AVAILABLE:
                 import re
-                # Exclusions : questions sur les capacités de l'IA
+                # Exclusions : questions théoriques sur les capacités (pas de demande d'action)
                 exclusion_patterns = [
-                    r'capable de',
-                    r'peut (faire|générer)',
-                    r'comment (avoir|obtenir|gagner)',
-                    r'il y a',
-                    r'existe',
-                    r'qui (fait|peut)',
+                    r'^(es-tu|est-ce que tu es|tu es)\s+capable',
+                    r'comment (avoir|obtenir|gagner)\s+(un|de)',
+                    r'(il y a|existe-t-il)\s+(un|une|des)',
+                    r'qui (fait|peut|crée)\s+(des|les)',
                 ]
                 is_capability_question = any(re.search(pattern, question_lower) for pattern in exclusion_patterns)
                 
                 if not is_capability_question:
-                    # Patterns TRÈS spécifiques : verbe d'action PUIS format
+                    # Patterns de détection PDF : verbe d'action + format
                     pdf_patterns = [
-                        r'^(fais|fait|génère|crée|rédige)\s+(moi\s+)?(un|le)\s+(pdf|rapport|document|livre|mémoire)',
-                        r'(génère|crée|rédige|écris)\s+.{0,30}(pdf|rapport|livre)',
-                        r'génération\s+de\s+(pdf|document)',
+                        r'(fais|fait|génère|génere|crée|créer|rédige|rédiger|écris|écrire)\s+(moi\s+)?(un|le|une)\s+(pdf|rapport|document|livre|mémoire)',
+                        r'(génère|génere|crée|créer|rédige|rédiger|écris|écrire)\s+.{0,50}(pdf|rapport|livre|document)',
+                        r'(peux-tu|peut-tu|pourrais-tu)\s+(générer|créer|faire|rédiger)\s+.{0,30}(pdf|document|rapport)',
+                        r'génération\s+de\s+(pdf|document|rapport)',
+                        r'(pdf|rapport|document|livre)\s+(de|avec)\s+\d+\s+page',
+                        r'un\s+(pdf|document|rapport)\s+(complet|détaillé)',
                     ]
                     explicit_pdf_request = any(re.search(pattern, question_lower) for pattern in pdf_patterns)
             
@@ -6828,23 +6829,24 @@ QUESTION UTILISATEUR: {prompt}"""
             explicit_pdf_request = False
             if PDF_GENERATOR_AVAILABLE:
                 import re
-                # Exclusions : questions sur les capacités de l'IA
+                # Exclusions : questions théoriques sur les capacités (pas de demande d'action)
                 exclusion_patterns = [
-                    r'capable de',
-                    r'peut (faire|générer)',
-                    r'comment (avoir|obtenir|gagner)',
-                    r'il y a',
-                    r'existe',
-                    r'qui (fait|peut)',
+                    r'^(es-tu|est-ce que tu es|tu es)\s+capable',
+                    r'comment (avoir|obtenir|gagner)\s+(un|de)',
+                    r'(il y a|existe-t-il)\s+(un|une|des)',
+                    r'qui (fait|peut|crée)\s+(des|les)',
                 ]
                 is_capability_question = any(re.search(pattern, question_lower) for pattern in exclusion_patterns)
                 
                 if not is_capability_question:
-                    # Patterns TRÈS spécifiques : verbe d'action PUIS format
+                    # Patterns de détection PDF : verbe d'action + format
                     pdf_patterns = [
-                        r'^(fais|fait|génère|crée|rédige)\s+(moi\s+)?(un|le)\s+(pdf|rapport|document|livre|mémoire)',
-                        r'(génère|crée|rédige|écris)\s+.{0,30}(pdf|rapport|livre)',
-                        r'génération\s+de\s+(pdf|document)',
+                        r'(fais|fait|génère|génere|crée|créer|rédige|rédiger|écris|écrire)\s+(moi\s+)?(un|le|une)\s+(pdf|rapport|document|livre|mémoire)',
+                        r'(génère|génere|crée|créer|rédige|rédiger|écris|écrire)\s+.{0,50}(pdf|rapport|livre|document)',
+                        r'(peux-tu|peut-tu|pourrais-tu)\s+(générer|créer|faire|rédiger)\s+.{0,30}(pdf|document|rapport)',
+                        r'génération\s+de\s+(pdf|document|rapport)',
+                        r'(pdf|rapport|document|livre)\s+(de|avec)\s+\d+\s+page',
+                        r'un\s+(pdf|document|rapport)\s+(complet|détaillé)',
                     ]
                     explicit_pdf_request = any(re.search(pattern, question_lower) for pattern in pdf_patterns)
             
