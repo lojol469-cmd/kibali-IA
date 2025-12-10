@@ -6161,163 +6161,6 @@ Réponds de manière structurée et professionnelle:"""
                         st.markdown(message.get("content", ""))
         
         # Input de chat stylisé - TOUJOURS EN BAS
-        if prompt := st.chat_input("💭 Pose ta question ici...", key="chat_input"):age
-                    
-                    # Formater la réponse avec Markdown pour structure
-                    formatted_response = content
-                    
-                    # Carte complète en un seul bloc avec contenu markdown
-                    st.markdown(f'''
-<style>
-@keyframes borderShimmer {{{{
-    0%, 100% {{{{ border-image: linear-gradient(135deg, #00ff88, #0088ff, #00ff88) 1; }}}}
-    50% {{{{ border-image: linear-gradient(135deg, #0088ff, #00ffff, #0088ff) 1; }}}}
-}}}}
-
-@keyframes logoGlow {{{{
-    0%, 100% {{{{ filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.5)); }}}}
-    50% {{{{ filter: drop-shadow(0 0 20px rgba(0, 255, 136, 0.8)); }}}}
-}}}}
-
-@keyframes slideIn {{{{
-    0% {{{{ transform: translateY(20px); opacity: 0; }}}}
-    100% {{{{ transform: translateY(0); opacity: 1; }}}}
-}}}}
-
-.kibali-response-box h2 {{{{
-    color: #0066cc !important;
-    font-size: 1.6rem !important;
-    font-weight: 700 !important;
-    margin-top: 1.5rem !important;
-    margin-bottom: 1rem !important;
-}}}}
-
-.kibali-response-box h3 {{{{
-    color: #00aa66 !important;
-    font-size: 1.3rem !important;
-    font-weight: 700 !important;
-    margin-top: 1.2rem !important;
-    margin-bottom: 0.8rem !important;
-}}}}
-
-.kibali-response-box p {{{{
-    color: #1a1a1a !important;
-    font-weight: 600 !important;
-    font-size: 1.05rem !important;
-    margin: 1rem 0 !important;
-    line-height: 1.8 !important;
-}}}}
-
-.kibali-response-box ul, .kibali-response-box ol {{{{
-    color: #1a1a1a !important;
-    font-weight: 600 !important;
-}}}}
-
-.kibali-response-box li {{{{
-    color: #1a1a1a !important;
-    font-weight: 600 !important;
-    margin: 0.5rem 0 !important;
-}}}}
-
-.kibali-response-box strong {{{{
-    color: #0066cc !important;
-    font-weight: 700 !important;
-    font-size: 1.1rem !important;
-}}}}
-
-.kibali-response-box code {{{{
-    background: rgba(0, 170, 102, 0.1);
-    padding: 0.2rem 0.4rem;
-    border-radius: 4px;
-    color: #00aa66;
-    font-weight: 600 !important;
-}}}}
-
-.kibali-response-box a {{{{
-    color: #0066cc !important;
-    font-weight: 600 !important;
-    text-decoration: underline;
-}}}}
-
-/* Forcer le texte NOIR et gras sur TOUT le contenu */
-.kibali-response-box * {{{{
-    color: #1a1a1a !important;
-    font-weight: 600 !important;
-}}}}
-</style>
-
-<div class="kibali-response-box" style="
-    background: rgba(255, 255, 255, 0.95);
-    padding: 2rem;
-    border-radius: 16px;
-    margin: 2rem 0.5rem;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15), 0 8px 40px rgba(0, 0, 0, 0.1);
-    border: 2px solid rgba(255, 255, 255, 0.8);
-    animation: slideIn 0.5s ease-out;
-">
-    <div style="
-        display: flex; 
-        align-items: center; 
-        margin-bottom: 1.5rem; 
-        gap: 0.75rem;
-        padding-bottom: 1rem;
-        border-bottom: 2px solid rgba(0, 255, 136, 0.2);
-    ">
-        <span style="
-            font-size: 2rem; 
-            font-weight: 900;
-            background: linear-gradient(135deg, #00ff88 0%, #00ffff 50%, #0088ff 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            animation: logoGlow 2s ease-in-out infinite;
-            filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.5));
-        ">K</span>
-        <strong style="
-            color: #00ff88; 
-            font-size: 1.2rem;
-            text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
-        ">Kibali AI</strong>
-        <span style="
-            margin-left: auto;
-            padding: 0.4rem 1rem;
-            background: linear-gradient(135deg, rgba(0, 255, 136, 0.2), rgba(0, 136, 255, 0.2));
-            border: 1px solid rgba(0, 255, 136, 0.4);
-            border-radius: 25px;
-            font-size: 0.8rem;
-            color: #00ff88;
-            font-weight: 600;
-        ">🤖 Réponse enrichie</span>
-    </div>
-    
-    <div style="line-height: 1.8; font-size: 1.05rem; color: #ffffff;">
-        {formatted_response}
-    </div>
-</div>
-''', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Ancre pour auto-scroll vers le bas
-        st.markdown('<div id="chat-bottom"></div>', unsafe_allow_html=True)
-        
-        # Script JavaScript pour auto-scroll
-        st.markdown("""
-        <script>
-        // Auto-scroll vers le bas quand nouveaux messages
-        const chatBottom = document.getElementById('chat-bottom');
-        if (chatBottom) {
-            chatBottom.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
-        
-        // Garder le focus sur l'input
-        const chatInput = document.querySelector('[data-testid="stChatInput"] input');
-        if (chatInput) {
-            chatInput.focus();
-        }
-        </script>
-        """, unsafe_allow_html=True)
-        
-        # Input de chat stylisé - TOUJOURS EN BAS
         if prompt := st.chat_input("💭 Pose ta question ici...", key="chat_input"):
             # Initialiser la variable response
             response = ""
@@ -6408,11 +6251,143 @@ QUESTION UTILISATEUR: {prompt}"""
             needs_data_extraction = any(kw in question_lower for kw in ['données', 'valeurs', 'liste', 'extrait', 'montre', 'affiche', 'trouve'])
             needs_conversion = any(kw in question_lower for kw in ['convertis', 'convert', 'numpy', 'tableau', 'dataframe', 'pandas', 'csv', 'json', 'extraction'])
             needs_ert_analysis = any(kw in question_lower for kw in ['ert', 'résistivité', 'resistivité', 'géophysique', 'forage', 'nappe', 'aquifère', 'eau souterraine'])
+            needs_pdf_generation = any(kw in question_lower for kw in ['rédige', 'génère', 'crée', 'écris', 'fait']) and any(kw in question_lower for kw in ['pdf', 'rapport', 'document', 'thèse', 'livre', 'mémoire']) and any(str(n) in prompt for n in range(10, 501))
+            
+            # 📄 GÉNÉRATION DE PDF MASSIF (20-500 PAGES)
+            if needs_pdf_generation:
+                import re
+                from pdf_generator_tool import generate_massive_pdf
+                
+                # Extraire le nombre de pages
+                num_pages = 30  # défaut
+                numbers_found = re.findall(r'\b(\d+)\b', prompt)
+                for num_str in numbers_found:
+                    n = int(num_str)
+                    if 10 <= n <= 500:
+                        num_pages = n
+                        break
+                
+                # Extraire le sujet
+                topic_patterns = [
+                    r'sur\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+                    r'sur\s+(.+)',
+                    r'de\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+                ]
+                
+                topic = "Sujet non spécifié"
+                for pattern in topic_patterns:
+                    match = re.search(pattern, prompt, re.IGNORECASE)
+                    if match:
+                        topic = match.group(1).strip()
+                        break
+                
+                # Afficher le plan
+                with st.expander("📋 Plan de Génération PDF", expanded=True):
+                    st.markdown(f"""
+                    ### 📄 Génération de Document Massif
+                    
+                    **Sujet:** {topic}
+                    **Pages:** {num_pages}
+                    **Modèle:** {WORKING_MODELS[model_choice]}
+                    
+                    **Étapes:**
+                    1. ✅ Structure du document (Table des matières)
+                    2. ⏳ Introduction (2-3 pages)
+                    3. ⏳ Chapitres ({num_pages // 10} chapitres × 8-10 pages)
+                    4. ⏳ Conclusion (2-3 pages)
+                    5. ⏳ Compilation PDF avec ReportLab
+                    
+                    **Temps estimé:** {num_pages // 2} - {num_pages} minutes
+                    """)
+                
+                # Barre de progression
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                def update_progress(step, total, message):
+                    progress_bar.progress(step / total)
+                    status_text.text(f"⚡ {message} ({step}%)")
+                
+                try:
+                    # Générer le PDF
+                    client = create_client()
+                    pdf_bytes = generate_massive_pdf(
+                        topic=topic,
+                        num_pages=num_pages,
+                        client=client,
+                        model_name=WORKING_MODELS[model_choice],
+                        progress_callback=update_progress
+                    )
+                    
+                    # Succès!
+                    progress_bar.progress(100)
+                    status_text.text("✅ PDF généré avec succès!")
+                    
+                    # Bouton de téléchargement
+                    st.download_button(
+                        label="📥 Télécharger le PDF",
+                        data=pdf_bytes,
+                        file_name=f"{topic[:30]}__{num_pages}pages.pdf",
+                        mime="application/pdf"
+                    )
+                    
+                    # Afficher les statistiques
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("📄 Pages", num_pages)
+                    with col2:
+                        st.metric("💾 Taille", f"{len(pdf_bytes) / 1024:.1f} KB")
+                    with col3:
+                        st.metric("✅ Statut", "Terminé")
+                    
+                    # Message de confirmation
+                    response = f"""✅ **Document PDF généré avec succès!**
+
+📊 **Détails:**
+- 📄 **Sujet:** {topic}
+- 📏 **Pages:** {num_pages}
+- 💾 **Taille:** {len(pdf_bytes) / 1024:.1f} KB
+- 📁 **Format:** PDF professionnel avec ReportLab
+- 🎨 **Structure:** Introduction, {num_pages // 10} chapitres, Conclusion
+
+**Contenu inclus:**
+- ✅ Page de titre
+- ✅ Table des matières
+- ✅ Introduction détaillée
+- ✅ Chapitres structurés avec sous-sections
+- ✅ Conclusion synthétique
+- ✅ Mise en page professionnelle
+
+Cliquez sur le bouton ci-dessus pour télécharger votre document!"""
+                    
+                    st.session_state.chat_history.append({"role": "assistant", "content": response})
+                    
+                    with chat_container:
+                        with st.chat_message("assistant", avatar="🗺️"):
+                            st.markdown(response)
+                    
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ Erreur lors de la génération: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+                    return
             
             # ═══════════════════════════════════════════════════════════════════
             # FICHIER BINAIRE - CONTEXTE ABSOLU ET EXCLUSIF (AVEC CACHE)
             # ═══════════════════════════════════════════════════════════════════
-            if 'binary_files' in st.session_state and st.session_state.binary_files:
+            # ⚡ VÉRIFIER SI LA QUESTION CONCERNE LE FICHIER UPLOADÉ
+            question_about_file = any(kw in question_lower for kw in [
+                'fichier', 'file', 'donnée', 'data', 'analyse', 'extrait', 'contenu',
+                'résistivité', 'ert', 'sondage', 'profondeur', 'valeur', 'colonne',
+                'ligne', 'tableau', 'calcul', 'moyenne', 'min', 'max', 'statistique',
+                'structure', 'format', 'convertis', 'export', 'visualise', 'graphique',
+                'explique', 'montre', 'affiche'
+            ])
+            
+            # LOGIQUE FICHIER: Seulement si fichier présent ET question concerne fichier
+            if 'binary_files' in st.session_state and st.session_state.binary_files and question_about_file:
                 # RÉCUPÉRER LE DERNIER FICHIER UPLOADÉ (le plus récent)
                 binary = st.session_state.binary_files[-1]
                 
