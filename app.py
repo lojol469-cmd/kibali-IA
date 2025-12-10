@@ -6251,7 +6251,8 @@ QUESTION UTILISATEUR: {prompt}"""
             needs_data_extraction = any(kw in question_lower for kw in ['données', 'valeurs', 'liste', 'extrait', 'montre', 'affiche', 'trouve'])
             needs_conversion = any(kw in question_lower for kw in ['convertis', 'convert', 'numpy', 'tableau', 'dataframe', 'pandas', 'csv', 'json', 'extraction'])
             needs_ert_analysis = any(kw in question_lower for kw in ['ert', 'résistivité', 'resistivité', 'géophysique', 'forage', 'nappe', 'aquifère', 'eau souterraine'])
-            needs_pdf_generation = any(kw in question_lower for kw in ['rédige', 'génère', 'crée', 'écris', 'fait']) and any(kw in question_lower for kw in ['pdf', 'rapport', 'document', 'thèse', 'livre', 'mémoire']) and any(str(n) in prompt for n in range(10, 501))
+            # Détection PDF: mots action + format (nombre optionnel)
+            needs_pdf_generation = any(kw in question_lower for kw in ['rédige', 'génère', 'crée', 'écris', 'fait']) and any(kw in question_lower for kw in ['pdf', 'rapport', 'document', 'thèse', 'livre', 'mémoire'])
             
             # 📄 GÉNÉRATION DE PDF MASSIF (20-500 PAGES)
             if needs_pdf_generation:
@@ -6377,17 +6378,22 @@ Cliquez sur le bouton ci-dessus pour télécharger votre document!"""
             # ═══════════════════════════════════════════════════════════════════
             # FICHIER BINAIRE - CONTEXTE ABSOLU ET EXCLUSIF (AVEC CACHE)
             # ═══════════════════════════════════════════════════════════════════
-            # ⚡ VÉRIFIER SI LA QUESTION CONCERNE LE FICHIER UPLOADÉ
-            question_about_file = any(kw in question_lower for kw in [
-                'fichier', 'file', 'donnée', 'data', 'analyse', 'extrait', 'contenu',
-                'résistivité', 'ert', 'sondage', 'profondeur', 'valeur', 'colonne',
-                'ligne', 'tableau', 'calcul', 'moyenne', 'min', 'max', 'statistique',
-                'structure', 'format', 'convertis', 'export', 'visualise', 'graphique',
-                'explique', 'montre', 'affiche'
-            ])
+            # ⚡ VÉRIFIER SI LA QUESTION CONCERNE **VRAIMENT** LE FICHIER UPLOADÉ
+            # Mots-clés TRÈS SPÉCIFIQUES pour éviter les faux positifs
+            question_about_file = (
+                'binary_files' in st.session_state and 
+                st.session_state.binary_files and
+                any(kw in question_lower for kw in [
+                    'ce fichier', 'le fichier', 'du fichier', 'dans le fichier',
+                    'fichier uploadé', 'fichier téléchargé', 'données du fichier',
+                    'contenu du fichier', 'analyse du fichier', 'ce .dat', 'ce .csv',
+                    'résistivité du', 'profondeur dans', 'valeurs du fichier',
+                    'colonnes du', 'lignes du fichier', 'structure du fichier'
+                ])
+            )
             
-            # LOGIQUE FICHIER: Seulement si fichier présent ET question concerne fichier
-            if 'binary_files' in st.session_state and st.session_state.binary_files and question_about_file:
+            # LOGIQUE FICHIER: Seulement si VRAIMENT une question sur le fichier
+            if question_about_file:
                 # RÉCUPÉRER LE DERNIER FICHIER UPLOADÉ (le plus récent)
                 binary = st.session_state.binary_files[-1]
                 
