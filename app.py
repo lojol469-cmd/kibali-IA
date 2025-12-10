@@ -5296,6 +5296,24 @@ def main():
             enriched_prompt = prompt
             conversation_context = ""
             
+            # 📝 ANALYSE DU CONTEXTE RÉCENT pour détecter le sujet de conversation
+            recent_context = ""
+            current_topic = ""
+            if len(st.session_state.chat_history_normal) >= 2:
+                # Prendre les 3 derniers échanges pour comprendre le contexte
+                recent_messages = st.session_state.chat_history_normal[-6:]  # 3 échanges = 6 messages
+                recent_context = "\n".join([
+                    f"{'👤 ' if msg['role'] == 'user' else '🤖 '}{msg['content'][:200]}"
+                    for msg in recent_messages
+                ])
+                
+                # Extraire le sujet principal des messages utilisateur récents
+                user_messages = [msg['content'] for msg in recent_messages if msg['role'] == 'user']
+                if user_messages:
+                    # Le dernier message utilisateur avant celui-ci donne le contexte
+                    if len(user_messages) > 1:
+                        current_topic = user_messages[-2][:300]  # Sujet = dernière question avant celle-ci
+            
             try:
                 from chat_memory import get_conversation_context
                 conversation_context = get_conversation_context(prompt, st.session_state.chat_vectordb)
@@ -5310,6 +5328,26 @@ QUESTION ACTUELLE: {prompt}"""
             
             # 🎯 ANALYSE INTELLIGENTE DE L'INTENTION AVEC LES OUTILS
             question_lower = prompt.lower()
+            
+            # 🔍 DÉTECTION DE DEMANDES IMPLICITES (basées sur le contexte)
+            implicit_web_search = False
+            if current_topic:  # Si on a un sujet de conversation en cours
+                # Détecter les demandes courtes qui font référence au sujet actuel
+                implicit_patterns = [
+                    r'^(recherche|cherche|trouve|regarde)(\s+(sur\s+)?(internet|le\s+web|google|en\s+ligne))?$',
+                    r'^(fais\s+une\s+)?recherche(\s+web)?$',
+                    r'^(va\s+sur\s+)?(internet|google|le\s+web)$',
+                    r'^plus\s+(d\'info|d\'infos|d\'informations|de\s+détails)$',
+                    r'^(trouve|cherche)\s+(moi\s+)?(plus|davantage|des\s+infos?|des\s+informations)$',
+                    r'^(donne|montre)\s+(moi\s+)?plus\s+(d\'info|de\s+détails)$',
+                    r'^(continue|approfondis|développe)$',
+                ]
+                
+                if any(re.search(pattern, question_lower) for pattern in implicit_patterns):
+                    implicit_web_search = True
+                    # Enrichir le prompt avec le sujet actuel
+                    enriched_prompt = f"{current_topic}\n\n{prompt}"
+                    print(f"🔍 Détection recherche implicite sur: {current_topic[:100]}")
             
             # Détecter EXPLICITEMENT une demande de PDF (doit être très explicite)
             explicit_pdf_request = False
@@ -5437,13 +5475,27 @@ Cliquez sur le bouton ci-dessous pour télécharger votre document!"""
                         web_context = ""
                         if web_enabled:
                             try:
-                                web_results = enhanced_web_search(prompt, max_results=3)
+                                # 🔍 Recherche web AUTOMATIQUE si:
+                                # 1. Demande implicite détectée ("recherche sur internet")
+                                # 2. Question factuelle sans info locale (détecté plus tard)
+                                search_query = prompt
+                                should_force_search = implicit_web_search
+                                
+                                if implicit_web_search and current_topic:
+                                    # Utiliser le sujet actuel si recherche implicite
+                                    search_query = current_topic
+                                    print(f"🌐 Recherche web automatique sur sujet actuel: {search_query[:100]}")
+                                
+                                web_results = enhanced_web_search(search_query, max_results=5)
                                 if web_results:
-                                    web_context = "\n\n📚 **Informations web:**\n"
-                                    for r in web_results[:3]:
-                                        web_context += f"- {r.get('title', '')}: {r.get('body', '')[:200]}...\n"
-                            except:
-                                pass
+                                    web_context = "\n\n📚 **Informations web récentes:**\n"
+                                    for r in web_results[:5]:
+                                        web_context += f"- **{r.get('title', '')}:** {r.get('body', '')[:250]}...\n\n"
+                                    
+                                    if implicit_web_search:
+                                        web_context = f"🔍 **Recherche effectuée sur: {search_query[:150]}**\n\n" + web_context
+                            except Exception as e:
+                                print(f"⚠️ Erreur recherche web: {e}")
                         
                         # Recherche RAG si vectordb disponible
                         rag_context = ""
@@ -5549,14 +5601,24 @@ Cliquez sur le bouton ci-dessous pour télécharger votre document!"""
                                 message_placeholder = st.empty()
                                 full_response = ""
                                 
-                                # 🧠 PROMPT SYSTÈME pour plus d'autonomie
-                                system_instructions = """Tu es Kibali, un assistant IA multimodal intelligent et autonome.
+                                # 🧠 PROMPT SYSTÈME pour plus d'autonomie et CONTINUITÉ
+                                system_instructions = f"""Tu es Kibali, un assistant IA multimodal intelligent et autonome.
 
-COMPORTEMENT AUTONOME:
-1. Si tu n'as pas l'information dans ton contexte, INDIQUE-LE clairement
-2. Suggère des outils pertinents ("Je peux rechercher sur le web", "Je peux calculer ça")
-3. Utilise les informations des outils fournis dans le contexte
-4. Sois proactif: anticipe les besoins de l'utilisateur
+CONTEXTE DE CONVERSATION:
+{recent_context if recent_context else "Pas de conversation précédente"}
+
+COMPORTEMENT AUTONOME ET CONTEXTUEL:
+1. **CONTINUITÉ:** Si l'utilisateur fait référence à un sujet déjà discuté, CONTINUE sur ce sujet
+2. **DÉTECTION IMPLICITE:** "recherche" ou "cherche" = recherche sur le SUJET ACTUEL de la conversation
+3. **UTILISE LE CONTEXTE:** Les infos web/documents fournis sont déjà sur le sujet dont on parle
+4. **SOIS PROACTIF:** Anticipe les besoins, suggère des actions concrètes
+
+RÈGLES DE CONVERSATION:
+- Ne perds JAMAIS le fil de la conversation
+- Si demande courte ("recherche", "plus d'infos"), c'est sur le SUJET EN COURS
+- Utilise TOUJOURS les informations du contexte fourni (web, documents, conversation)
+- Sois concis mais complet
+- Structure tes réponses (bullet points, sections)
 
 OUTILS DISPONIBLES:
 - 🌐 Recherche web (pour infos récentes/factuelles)
