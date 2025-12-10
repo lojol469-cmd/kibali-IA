@@ -89,6 +89,9 @@ try:
 except Exception as e:
     print(f"⚠️ Orchestrateur non disponible: {e}")
     ORCHESTRATOR_AVAILABLE = False
+    analyze_and_plan = None
+    get_ai_relay = None
+    get_orchestrator = None
 
 # Initialiser les dossiers de modèles
 ensure_model_dirs()
@@ -189,35 +192,22 @@ except ImportError:
 
 def clean_response_text(text: str) -> str:
     """
-    Nettoie le texte de réponse en supprimant les caractères non-latins
-    (chinois, arabe, cyrillique, etc.) qui peuvent apparaître par erreur
+    Nettoie le texte de réponse de manière conservatrice
+    Ne supprime que les caractères de contrôle problématiques
     """
     import re
     
     if not text:
         return text
     
-    # Détecter et supprimer les blocs de texte chinois/asiatique
-    # Plages Unicode pour caractères CJK (chinois, japonais, coréen)
-    text = re.sub(r'[\u4e00-\u9fff\u3400-\u4dbf\u20000-\u2a6df\u2a700-\u2b73f\u2b740-\u2b81f\u2b820-\u2ceaf\uf900-\ufaff\u3300-\u33ff\ufe30-\ufe4f\uf900-\ufaff\u2f800-\u2fa1f]+', '', text)
-    
-    # Supprimer les caractères arabes
-    text = re.sub(r'[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]+', '', text)
-    
-    # Supprimer les caractères cyrilliques (russe, ukrainien, etc.)
-    text = re.sub(r'[\u0400-\u04ff\u0500-\u052f\u2de0-\u2dff\ua640-\ua69f\u1c80-\u1c8f]+', '', text)
-    
-    # Supprimer les caractères coréens Hangul
-    text = re.sub(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\ud7b0-\ud7ff]+', '', text)
-    
-    # Supprimer les caractères japonais (hiragana, katakana)
-    text = re.sub(r'[\u3040-\u309f\u30a0-\u30ff]+', '', text)
+    # Supprimer uniquement les caractères de contrôle problématiques (sauf \n, \t, \r)
+    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
     
     # Nettoyer les espaces multiples consécutifs
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r' +', ' ', text)
     
     # Nettoyer les sauts de ligne excessifs
-    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    text = re.sub(r'\n{4,}', '\n\n\n', text)
     
     return text.strip()
 
@@ -5219,7 +5209,7 @@ def main():
                     with st.spinner(f"📄 Traitement de {uploaded_file.name}..."):
                         try:
                             # 1. Sauvegarder le PDF dans PDFS_PATH
-                            pdf_path = os.path.join(PDFS_PATH, uploaded_file.name)
+                            pdf_path = Path(PDFS_PATH) / uploaded_file.name
                             with open(pdf_path, 'wb') as f:
                                 f.write(file_data)
                             
@@ -5291,12 +5281,12 @@ def main():
                             # 4. Stocker les infos du PDF pour le panneau d'outils et contexte de conversation
                             pdf_info = {
                                 'name': uploaded_file.name,
-                                'path': pdf_path,
+                                'path': str(pdf_path),
                                 'text': pdf_text,
                                 'pages': pdf_pages,
                                 'word_count': word_count,
                                 'chunks': len(chunks),
-                                'uploaded_at': os.path.getmtime(pdf_path)  # Timestamp pour tracking
+                                'uploaded_at': pdf_path.stat().st_mtime  # Timestamp pour tracking
                             }
                             st.session_state.chat_uploaded_pdfs.append(pdf_info)
                             
@@ -6157,46 +6147,21 @@ Réponds de manière structurée et professionnelle:"""
         with chat_container:
             for message in st.session_state.chat_history:
                 if message["role"] == "user":
-                    st.markdown(f'''<div class="chat-message-user" style="
-                        background: linear-gradient(145deg, #0088ff 0%, #00ff88 100%);
-                        color: white;
-                        padding: 1.2rem 1.8rem;
-                        border-radius: 18px 18px 4px 18px;
-                        margin: 1.5rem 0.5rem 1.5rem auto;
-                        max-width: 75%;
-                        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-                        border: 2px solid;
-                        border-image: linear-gradient(45deg, #0088ff, #00ff88, #0088ff) 1;
-                        animation: borderGlow 2s ease-in-out infinite, slideInRight 0.4s ease-out;
-                        font-weight: 500;
-                    ">
-                        <strong>👤 Vous:</strong><br>{message["content"]}
-                    </div>
-                    <style>
-                    @keyframes borderGlow {{{{
-                        0%, 100% {{{{ border-image: linear-gradient(45deg, #0088ff, #00ff88, #0088ff) 1; }}}}
-                        50% {{{{ border-image: linear-gradient(45deg, #00ff88, #00ffff, #00ff88) 1; }}}}
-                    }}}}
-                    @keyframes slideInRight {{{{
-                        0% {{{{ transform: translateX(30px); opacity: 0; }}}}
-                        100% {{{{ transform: translateX(0); opacity: 1; }}}}
-                    }}}}
-                    </style>
-                    ''', unsafe_allow_html=True)
+                    with st.chat_message("user", avatar="👤"):
+                        st.markdown(message["content"])
+                
                 elif message["role"] == "web_media":
                     # Affichage spécial pour les médias web
-                    st.markdown(message["content"], unsafe_allow_html=True)
+                    with st.chat_message("assistant", avatar="🌐"):
+                        st.markdown(message["content"], unsafe_allow_html=True)
+                
                 else:
-                    # Vérifier si c'est du HTML pur (panneau d'outils PDF ou contient <div)
-                    content = message.get("content", "")
-                    is_html_flag = message.get("is_html", False)
-                    has_div_tags = ("<div" in content and "</div>" in content)
-                    has_style_attr = "style=" in content
-                    
-                    # Si c'est du HTML (flag OU contient div OU contient style), le rendre directement
-                    if is_html_flag or has_div_tags or has_style_attr:
-                        st.markdown(content, unsafe_allow_html=True)
-                        continue  # Skip le reste du formatage
+                    # Message assistant avec avatar K personnalisé
+                    with st.chat_message("assistant", avatar="🗺️"):
+                        st.markdown(message.get("content", ""))
+        
+        # Input de chat stylisé - TOUJOURS EN BAS
+        if prompt := st.chat_input("💭 Pose ta question ici...", key="chat_input"):age
                     
                     # Formater la réponse avec Markdown pour structure
                     formatted_response = content
