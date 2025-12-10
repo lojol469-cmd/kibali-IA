@@ -84,31 +84,70 @@ class PDFSearchTool(BaseTool):
         return min(score, 1.0)
 
     def execute(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Effectue une recherche dans les PDFs"""
+        """Effectue une recherche dans les PDFs via la base vectorielle"""
         try:
-            # Message indiquant que l'outil nécessite l'intégration avec RAG
+            # Récupérer la vectordb du contexte
+            vectordb = context.get('vectordb') if context else None
+            rag_docs = context.get('rag_docs', []) if context else []
+            
+            if not vectordb and not rag_docs:
+                return {
+                    'success': False,
+                    'error': 'Aucune base de documents disponible',
+                    'output': '⚠️ Aucun document PDF n\'est actuellement chargé dans le système.'
+                }
+            
+            # Si des docs ont déjà été trouvés, les utiliser
+            if rag_docs:
+                results_text = f"📚 **{len(rag_docs)} documents pertinents trouvés:**\n\n"
+                for i, doc in enumerate(rag_docs[:5], 1):
+                    content = doc.page_content[:400].replace('\n', ' ').strip()
+                    source = doc.metadata.get('source', 'Source inconnue') if hasattr(doc, 'metadata') else 'Source inconnue'
+                    results_text += f"**Document {i}** ({source}):\n{content}...\n\n"
+                
+                return {
+                    'success': True,
+                    'output': results_text,
+                    'content': results_text,
+                    'num_results': len(rag_docs),
+                    'documents': [{'content': doc.page_content, 'metadata': doc.metadata} for doc in rag_docs]
+                }
+            
+            # Sinon, faire une recherche dans la vectordb
+            elif vectordb:
+                search_results = vectordb.similarity_search(query, k=10)
+                
+                if not search_results:
+                    return {
+                        'success': False,
+                        'output': '🔍 Aucun résultat trouvé pour cette recherche dans les documents.',
+                        'num_results': 0
+                    }
+                
+                results_text = f"📚 **{len(search_results)} résultats trouvés:**\n\n"
+                for i, doc in enumerate(search_results[:5], 1):
+                    content = doc.page_content[:400].replace('\n', ' ').strip()
+                    source = doc.metadata.get('source', 'Source inconnue') if hasattr(doc, 'metadata') else 'Source inconnue'
+                    results_text += f"**{i}.** ({source})\n{content}...\n\n"
+                
+                return {
+                    'success': True,
+                    'output': results_text,
+                    'content': results_text,
+                    'num_results': len(search_results),
+                    'documents': [{'content': doc.page_content, 'metadata': doc.metadata} for doc in search_results]
+                }
+            
             return {
-                'query': query,
-                'tool': 'pdf_document_search',
-                'action': 'search_pdfs',
-                'message': '🔍 Recherche dans les documents PDF...',
-                'instructions': [
-                    "1. Charger la base vectorielle si pas déjà chargée",
-                    "2. Effectuer une recherche sémantique sur la requête",
-                    "3. Extraire les passages pertinents des PDFs",
-                    "4. Synthétiser les informations trouvées"
-                ],
-                'search_params': {
-                    'k': 10,  # Nombre de résultats à chercher
-                    'search_type': 'semantic',
-                    'filter_topic': self._extract_topic(query)
-                },
-                'success': True
+                'success': False,
+                'error': 'Configuration invalide',
+                'output': '⚠️ Erreur de configuration de la recherche documentaire.'
             }
 
         except Exception as e:
             return {
                 'error': f"Erreur lors de la recherche PDF: {str(e)}",
+                'output': f"❌ Erreur: {str(e)}",
                 'query': query,
                 'success': False
             }

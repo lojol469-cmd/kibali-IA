@@ -12,6 +12,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, 
 from reportlab.lib import colors
 from datetime import datetime
 import io
+import time
 
 
 class MassivePDFGenerator:
@@ -21,6 +22,7 @@ class MassivePDFGenerator:
     - Relais automatique entre IAs quand limite de tokens atteinte
     - Formatage professionnel avec ReportLab
     - Support 20-500 pages
+    - Retry automatique en cas d'erreur 503
     """
     
     def __init__(self, client, model_name="qwen2.5:14b"):
@@ -32,7 +34,50 @@ class MassivePDFGenerator:
         self.client = client
         self.model_name = model_name
         self.max_tokens_per_section = 3000  # ~4-6 pages par section
+        self.max_retries = 5
+        self.retry_delay = 2  # secondes
         
+    def _call_api_with_retry(self, messages, max_tokens, temperature=0.7):
+        """
+        Appelle l'API avec retry automatique en cas d'erreur 503
+        
+        Args:
+            messages: Messages pour l'API
+            max_tokens: Tokens max
+            temperature: Température
+            
+        Returns:
+            Response object
+        """
+        for attempt in range(self.max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                )
+                return response
+                
+            except Exception as e:
+                error_str = str(e)
+                
+                # Erreur 503 : serveur surchargé, réessayer
+                if "503" in error_str or "Service Temporarily Unavailable" in error_str:
+                    if attempt < self.max_retries - 1:
+                        wait_time = self.retry_delay * (2 ** attempt)  # Backoff exponentiel
+                        print(f"⚠️ Serveur surchargé, nouvelle tentative dans {wait_time}s... ({attempt + 1}/{self.max_retries})")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        raise Exception(f"❌ Serveur HuggingFace indisponible après {self.max_retries} tentatives. Réessayez dans quelques minutes.")
+                
+                # Autres erreurs : lever immédiatement
+                else:
+                    raise e
+        
+        raise Exception(f"❌ Échec après {self.max_retries} tentatives")
+    
     def generate_section(self, prompt, context="", temperature=0.7):
         """
         Génère une section de texte avec l'IA
@@ -57,8 +102,7 @@ INSTRUCTIONS:
 - Style académique et professionnel
 """
         
-        response = self.client.chat.completions.create(
-            model=self.model_name,
+        response = self._call_api_with_retry(
             messages=[{"role": "user", "content": full_prompt}],
             max_tokens=self.max_tokens_per_section,
             temperature=temperature
@@ -97,8 +141,7 @@ Chapitre 2: [Titre]
   ...
 """
         
-        response = self.client.chat.completions.create(
-            model=self.model_name,
+        response = self._call_api_with_retry(
             messages=[{"role": "user", "content": structure_prompt}],
             max_tokens=1500,
             temperature=0.5
@@ -374,3 +417,109 @@ def generate_massive_pdf(topic, num_pages, client, model_name="qwen2.5:14b", pro
     """
     generator = MassivePDFGenerator(client, model_name)
     return generator.create_pdf(topic, num_pages, progress_callback=progress_callback)
+
+
+# Wrapper BaseTool pour intégration dynamique
+try:
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from __init__ import BaseTool
+    
+    class PDFGeneratorTool(BaseTool):
+        """Outil de génération de PDF massif (20-500 pages)"""
+        
+        @property
+        def name(self) -> str:
+            return "Générateur de PDF"
+        
+        @property
+        def description(self) -> str:
+            return "Génère des documents PDF massifs de 20 à 500 pages sur n'importe quel sujet"
+        
+        @property
+        def capabilities(self) -> list:
+            return [
+                "Génération de PDF",
+                "Rapports détaillés",
+                "Documents académiques",
+                "Thèses et mémoires",
+                "Livres blancs",
+                "Documentation technique"
+            ]
+        
+        def can_handle(self, query: str, context: dict = None) -> float:
+            """Détecte si la requête demande un PDF"""
+            query_lower = query.lower()
+            
+            # Mots-clés d'action
+            action_keywords = ['rédige', 'génère', 'crée', 'écris', 'fait', 'produit', 'compose']
+            # Mots-clés de format
+            format_keywords = ['pdf', 'rapport', 'document', 'thèse', 'livre', 'mémoire', 'manuel']
+            
+            has_action = any(kw in query_lower for kw in action_keywords)
+            has_format = any(kw in query_lower for kw in format_keywords)
+            
+            if has_action and has_format:
+                return 0.95  # Très haute confiance
+            elif has_format:
+                return 0.7  # Confiance modérée
+            else:
+                return 0.0
+        
+        def execute(self, query: str, context: dict = None) -> dict:
+            """Exécute la génération de PDF"""
+            import re
+            
+            # Extraire le nombre de pages
+            num_pages = 30  # défaut
+            numbers_found = re.findall(r'\b(\d+)\b', query)
+            for num_str in numbers_found:
+                n = int(num_str)
+                if 10 <= n <= 500:
+                    num_pages = n
+                    break
+            
+            # Extraire le sujet
+            topic_patterns = [
+                r'sur\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+                r'sur\s+(.+)',
+                r'de\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+            ]
+            
+            topic = "Sujet non spécifié"
+            for pattern in topic_patterns:
+                match = re.search(pattern, query, re.IGNORECASE)
+                if match:
+                    topic = match.group(1).strip()
+                    break
+            
+            # Client doit être fourni dans le contexte
+            if not context or 'client' not in context:
+                return {
+                    'success': False,
+                    'error': 'Client API non fourni dans le contexte'
+                }
+            
+            client = context['client']
+            model = context.get('model', 'qwen2.5:14b')
+            
+            # Générer le PDF
+            pdf_bytes = generate_massive_pdf(
+                topic=topic,
+                num_pages=num_pages,
+                client=client,
+                model_name=model
+            )
+            
+            return {
+                'success': True,
+                'pdf_bytes': pdf_bytes,
+                'topic': topic,
+                'num_pages': num_pages,
+                'size_kb': len(pdf_bytes) / 1024
+            }
+            
+except ImportError:
+    # Si BaseTool n'est pas disponible, ignorer le wrapper
+    pass

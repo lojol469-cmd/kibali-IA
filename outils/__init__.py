@@ -66,10 +66,12 @@ class ToolManager:
                     module = importlib.import_module(f'outils.{module_name}')
 
                     # Find all classes that inherit from BaseTool
+                    # Comparer par nom plutôt que par instance pour éviter problèmes d'import
                     for name, obj in inspect.getmembers(module):
                         if (inspect.isclass(obj) and
-                            issubclass(obj, BaseTool) and
-                            obj != BaseTool):
+                            hasattr(obj, '__bases__') and
+                            any('BaseTool' in str(base) for base in obj.__bases__) and
+                            'BaseTool' not in obj.__name__):
                             # Instantiate the tool
                             tool_instance = obj()
                             self.tools[tool_instance.name] = tool_instance
@@ -132,3 +134,27 @@ class ToolManager:
 
 # Instance globale du gestionnaire d'outils
 tool_manager = ToolManager()
+
+# Exports directs pour compatibilité
+from .pdf_generator_tool import generate_massive_pdf, MassivePDFGenerator
+
+try:
+    from .excel_ai_organizer import ExcelAIOrganizer, excel_organizer_tool
+    EXCEL_AVAILABLE = True
+    # Note: organize_excel_data n'est pas une classe mais une fonction dans le fichier
+except ImportError as e:
+    print(f"⚠️ Excel AI Organizer non disponible: {e}")
+    ExcelAIOrganizer = None
+    excel_organizer_tool = None
+    EXCEL_AVAILABLE = False
+
+__all__ = [
+    'BaseTool',
+    'ToolManager', 
+    'tool_manager',
+    'generate_massive_pdf',
+    'MassivePDFGenerator',
+    'ExcelAIOrganizer',
+    'excel_organizer_tool',
+    'EXCEL_AVAILABLE'
+]

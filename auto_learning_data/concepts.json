@@ -1,0 +1,38 @@
+{
+  "HTTP": {
+    "count": 1,
+    "documents": [
+      "afc53040f1f50b39cbd0f48b8215b635"
+    ],
+    "contexts": [
+      "Python est un langage de programmation. API REST pour HTTP."
+    ]
+  },
+  "Python": {
+    "count": 1,
+    "documents": [
+      "afc53040f1f50b39cbd0f48b8215b635"
+    ],
+    "contexts": [
+      "Python est un langage de programmation. API REST pour HTTP."
+    ]
+  },
+  "API": {
+    "count": 1,
+    "documents": [
+      "afc53040f1f50b39cbd0f48b8215b635"
+    ],
+    "contexts": [
+      "Python est un langage de programmation. API REST pour HTTP."
+    ]
+  },
+  "REST": {
+    "count": 1,
+    "documents": [
+      "afc53040f1f50b39cbd0f48b8215b635"
+    ],
+    "contexts": [
+      "Python est un langage de programmation. API REST pour HTTP."
+    ]
+  }
+}

@@ -12,6 +12,35 @@ from pathlib import Path
 # ⚠️ FORCER CPU AVANT TOUT IMPORT PYTORCH/TRANSFORMERS
 os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Désactiver CUDA complètement pour éviter erreurs kernel
 os.environ['FORCE_CPU'] = '1'
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # Éviter les meta tensors
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Désactiver les warnings TensorFlow oneDNN
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Réduire les logs TensorFlow (0=all, 1=info, 2=warning, 3=error)
+# NOTE: Ne pas activer HF_HUB_OFFLINE car on utilise l'API HuggingFace pour les requêtes LLM
+# os.environ['TRANSFORMERS_OFFLINE'] = '1'  # Mode offline désactivé pour API
+# os.environ['HF_HUB_OFFLINE'] = '1'  # Mode offline désactivé pour API
+
+# Désactiver complètement les meta tensors et device_map dans PyTorch/Transformers
+os.environ['ACCELERATE_USE_CPU'] = '1'
+os.environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
+
+# Optimisations mémoire: activer garbage collection et cache SSD
+import gc
+gc.enable()  # Activer garbage collection automatique
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'  # Fragmenter la mémoire
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # Éviter les deadlocks
+
+# Désactiver le lazy loading dans transformers pour éviter NotImplementedError avec meta tensors
+import sys
+if 'transformers' not in sys.modules:
+    # Patcher avant l'import
+    import importlib
+    def patch_transformers():
+        try:
+            import transformers.modeling_utils
+            transformers.modeling_utils.TORCH_INIT_META = False
+        except:
+            pass
+    patch_transformers()
 
 # Charger le token depuis .env
 from dotenv import load_dotenv
@@ -68,17 +97,18 @@ except ImportError as e:
     print(f"⚠️ Détecteur de structure binaire non disponible: {e}")
     BINARY_DETECTOR_AVAILABLE = False
 
-# Import du système d'auto-apprentissage
+# Import du système d'auto-apprentissage (optionnel)
 try:
     from auto_learning import get_auto_learning
     from knowledge_manager import get_knowledge_manager
     AUTO_LEARNING_AVAILABLE = True
     print("✅ Système d'auto-apprentissage chargé")
 except Exception as e:
-    print(f"⚠️ Auto-apprentissage non disponible: {e}")
+    # Module optionnel, pas besoin d'afficher l'erreur
     AUTO_LEARNING_AVAILABLE = False
     get_auto_learning = None
     get_knowledge_manager = None
+    print(f"⚠️ Auto-apprentissage non disponible: {e}")
 
 # Import de l'orchestrateur maître d'IA
 try:
@@ -242,6 +272,17 @@ try:
 except ImportError:
     EXCEL_AI_AVAILABLE = False
     print("⚠️ Excel AI Organizer non disponible")
+
+# Import du générateur de PDF
+try:
+    from outils.pdf_generator_tool import generate_massive_pdf, MassivePDFGenerator
+    PDF_GENERATOR_AVAILABLE = True
+    print("✅ Générateur de PDF chargé")
+except ImportError as e:
+    generate_massive_pdf = None
+    MassivePDFGenerator = None
+    PDF_GENERATOR_AVAILABLE = False
+    print(f"⚠️ Générateur de PDF non disponible: {e}")
 
 try:
     from transformers import pipeline
@@ -584,23 +625,23 @@ def load_local_llm_model():
 # ===============================================
 WORKING_MODELS = {
     # Qwen 2.5 - Apache 2.0 License - Usage commercial autorisé
-    "Qwen2.5 14B (Apache 2.0 - Commercial OK)": "Qwen/Qwen2.5-14B-Instruct",
-    "Qwen2.5 7B (Apache 2.0 - Rapide)": "Qwen/Qwen2.5-7B-Instruct",
-    "Qwen2.5 32B (Apache 2.0 - Très puissant)": "Qwen/Qwen2.5-32B-Instruct",
+    "Qwen2.5 14B (Recommandé)": "Qwen/Qwen2.5-14B-Instruct",
+    "Qwen2.5 7B (Rapide)": "Qwen/Qwen2.5-7B-Instruct",
+    "Qwen2.5 32B (Puissant)": "Qwen/Qwen2.5-32B-Instruct",
     
-    # Llama 3.2 - Apache 2.0 License (Meta autorisation commerciale)
-    "Llama 3.2 11B Vision (Apache 2.0 - Multimodal)": "meta-llama/Llama-3.2-11B-Vision-Instruct",
-    "Llama 3.1 8B (Apache 2.0 - Optimisé)": "meta-llama/Llama-3.1-8B-Instruct",
+    # Llama 3.2 - Apache 2.0 License
+    "Llama 3.2 11B Vision": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+    "Llama 3.1 8B": "meta-llama/Llama-3.1-8B-Instruct",
     
-    # Mistral - Apache 2.0 License - Usage commercial libre
-    "Mistral Nemo 12B (Apache 2.0 - Français)": "mistralai/Mistral-Nemo-Instruct-2407",
-    "Mistral 7B v0.3 (Apache 2.0 - Rapide)": "mistralai/Mistral-7B-Instruct-v0.3",
+    # Mistral - Apache 2.0 License
+    "Mistral Nemo 12B": "mistralai/Mistral-Nemo-Instruct-2407",
+    "Mistral 7B": "mistralai/Mistral-7B-Instruct-v0.3",
     
-    # Phi-3 Medium - MIT License - Microsoft open source commercial
-    "Phi-3 Medium 14B (MIT - Commercial)": "microsoft/Phi-3-medium-4k-instruct",
+    # Phi-3 Medium - MIT License
+    "Phi-3 Medium 14B": "microsoft/Phi-3-medium-4k-instruct",
     
-    # Gemma 2 - Gemma License (usage commercial autorisé par Google)
-    "Gemma 2 9B (Gemma License - Commercial OK)": "google/gemma-2-9b-it",
+    # Gemma 2 - Gemma License
+    "Gemma 2 9B": "google/gemma-2-9b-it",
 }
 # TOUS LES FICHIERS DANS LE MÊME DOSSIER CHATBOT
 CHATBOT_DIR = os.path.join(os.getcwd(), "kibali_data")
@@ -702,7 +743,7 @@ def process_pdfs():
     embedding_model = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
-        model_kwargs={'device': 'cpu'},
+        model_kwargs={'device': 'cpu', 'trust_remote_code': True},
         encode_kwargs={'device': 'cpu', 'batch_size': 32}
     )
     text_splitter = RecursiveCharacterTextSplitter(
@@ -782,7 +823,7 @@ def load_vectordb():
         embedding_model = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
             cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
-            model_kwargs={'device': 'cpu'},
+            model_kwargs={'device': 'cpu', 'trust_remote_code': True},
             encode_kwargs={'device': 'cpu', 'batch_size': 32}
         )
         
@@ -1863,7 +1904,12 @@ def final_search(question, vectordb, graph, pois):
 # Fonctions Modèles Hugging Face Spécialisés
 # ===============================================
 def initialize_specialized_models():
-    """Initialise les modèles spécialisés en mode LOCAL uniquement"""
+    """Initialise les modèles spécialisés en mode LOCAL uniquement avec optimisations mémoire"""
+    import torch
+    
+    # Forcer le mode CPU et désactiver device_map
+    torch.set_default_device('cpu')
+    
     models = {}
     
     # Vérifier si pipeline est disponible
@@ -1876,31 +1922,83 @@ def initialize_specialized_models():
             'ner': None
         }
     
-    print("🌐 Mode: LOCAL UNIQUEMENT (pas de téléchargement)")
+    print("🌐 Mode: LOCAL OPTIMISÉ (Quantification + Cache SSD)")
     
     try:
-        models['summarizer'] = pipeline(
-            "summarization", 
-            model=SUMMARIZER_MODEL, 
+        # Charger le modèle avec quantification et mmap pour économiser RAM
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, BitsAndBytesConfig
+        
+        # Configuration de quantification 8-bit pour réduire l'utilisation RAM
+        try:
+            import bitsandbytes
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_enable_fp32_cpu_offload=True
+            )
+            use_quantization = True
+            print("✅ Quantification 8-bit activée (bitsandbytes)")
+        except ImportError:
+            quantization_config = None
+            use_quantization = False
+            print("⚠️ bitsandbytes non disponible, pas de quantification")
+        
+        tokenizer = AutoTokenizer.from_pretrained(
+            SUMMARIZER_MODEL,
             cache_dir=str(SUMMARIZER_CACHE),
-            device_map="auto" if torch.cuda.is_available() else "cpu",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             local_files_only=True
         )
-        print("✅ Summarizer chargé en mode LOCAL")
+        
+        # Charger avec mmap pour utiliser le SSD comme cache
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            SUMMARIZER_MODEL,
+            cache_dir=str(SUMMARIZER_CACHE),
+            local_files_only=True,
+            low_cpu_mem_usage=True,  # Activer mode économie mémoire
+            torch_dtype=torch.float16,  # float16 pour économiser RAM
+            quantization_config=quantization_config if use_quantization else None,
+            use_safetensors=True,  # Utiliser safetensors (plus rapide)
+            device_map='cpu'
+        )
+        
+        models['summarizer'] = pipeline(
+            "summarization",
+            model=model,
+            tokenizer=tokenizer,
+            device='cpu'
+        )
+        print("✅ Summarizer chargé (float16 + mmap cache SSD)")
     except Exception as e:
         print(f"⚠️ Erreur chargement summarizer: {e}")
         models['summarizer'] = None
+    
     try:
-        models['translator'] = pipeline(
-            "translation", 
-            model=TRANSLATOR_MODEL, 
+        # Charger le modèle avec quantification et mmap
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        
+        tokenizer = AutoTokenizer.from_pretrained(
+            TRANSLATOR_MODEL,
             cache_dir=str(TRANSLATOR_CACHE),
-            device_map="auto" if torch.cuda.is_available() else "cpu",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             local_files_only=True
         )
-        print("✅ Translator chargé en mode LOCAL")
+        
+        # Charger avec mmap pour utiliser le SSD comme cache
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            TRANSLATOR_MODEL,
+            cache_dir=str(TRANSLATOR_CACHE),
+            local_files_only=True,
+            low_cpu_mem_usage=True,  # Activer mode économie mémoire
+            torch_dtype=torch.float16,  # float16 pour économiser RAM
+            use_safetensors=True,  # Utiliser safetensors (plus rapide)
+            device_map='cpu'
+        )
+        
+        models['translator'] = pipeline(
+            "translation",
+            model=model,
+            tokenizer=tokenizer,
+            device='cpu'
+        )
+        print("✅ Translator chargé (float16 + mmap cache SSD)")
     except Exception as e:
         print(f"⚠️ Erreur chargement translator: {e}")
         models['translator'] = None
@@ -1919,19 +2017,47 @@ def initialize_specialized_models():
     return models
 # Initialiser les modèles
 SPECIALIZED_MODELS = initialize_specialized_models()
+
+def clear_memory_cache():
+    """Nettoie le cache mémoire pour libérer la RAM"""
+    import gc
+    import torch
+    
+    # Garbage collection Python
+    gc.collect()
+    
+    # Vider le cache PyTorch (même sur CPU)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    # Forcer le nettoyage des caches transformers
+    try:
+        gc.collect()
+    except:
+        pass
+    
+    return "🧹 Mémoire nettoyée"
+
 def summarize_text(text):
     if SPECIALIZED_MODELS.get('summarizer') is None:
         return "❌ Modèle de résumé non disponible"
     try:
-        return SPECIALIZED_MODELS['summarizer'](text[:1024], max_length=200, min_length=30, do_sample=False)[0]['summary_text']
+        result = SPECIALIZED_MODELS['summarizer'](text[:1024], max_length=200, min_length=30, do_sample=False)[0]['summary_text']
+        clear_memory_cache()  # Nettoyer après utilisation
+        return result
     except Exception as e:
+        clear_memory_cache()
         return f"❌ Erreur résumé: {e}"
+
 def translate_text(text, src_lang="fr", tgt_lang="en"):
     if SPECIALIZED_MODELS.get('translator') is None:
         return "❌ Modèle de traduction non disponible"
     try:
-        return SPECIALIZED_MODELS['translator'](text)[0]['translation_text']
+        result = SPECIALIZED_MODELS['translator'](text)[0]['translation_text']
+        clear_memory_cache()  # Nettoyer après utilisation
+        return result
     except Exception as e:
+        clear_memory_cache()
         return f"❌ Erreur traduction: {e}"
 def generate_detailed_description_with_clip(image_path, vision_models):
     """
@@ -4936,7 +5062,7 @@ def main():
     # ===============================================
     # Onglets avec design fluide
     # ===============================================
-    tab_names = ["⚙️ **Configuration**", "💬 **Chat RAG + Web**", "🗺️ **Trajets**", "📸 **Analyse Image**", "🌐 **Recherche Web**", "📷 **Photogrammétrie**"]
+    tab_names = ["⚙️ **Configuration**", "💬 **Chat Normal**", "📁 **Chat Fichiers**", "🗺️ **Trajets**", "📸 **Analyse Image**", "🌐 **Recherche Web**", "📷 **Photogrammétrie**"]
     
     # Ajouter l'onglet binaire si le gestionnaire est disponible
     if BINARY_HANDLER_AVAILABLE:
@@ -4952,12 +5078,12 @@ def main():
     tabs = st.tabs(tab_names)
     
     # Assignation des onglets
-    tab1, tab2, tab3, tab4, tab5, tab_photo = tabs[:6]
+    tab1, tab2, tab_files, tab3, tab4, tab5, tab_photo = tabs[:7]
     
     # Onglet binaire si disponible
     tab_binary = None
-    current_tab_idx = 6
-    if BINARY_HANDLER_AVAILABLE and len(tabs) > 6:
+    current_tab_idx = 7
+    if BINARY_HANDLER_AVAILABLE and len(tabs) > 7:
         tab_binary = tabs[current_tab_idx]
         current_tab_idx += 1
     
@@ -5076,7 +5202,7 @@ def main():
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ===============================================
-    # Onglet 2: Chat RAG Amélioré avec cartes
+    # Onglet 2: Chat Normal (Sans fichiers)
     # ===============================================
     with tab2:
         # Contrôles compacts dans un expander
@@ -5087,18 +5213,19 @@ def main():
                     "🎯 **Modèle IA**",
                     options=list(WORKING_MODELS.keys()),
                     index=0,
-                    key="model_select",
+                    key="model_select_normal",
                     help="Choisis le modèle d'IA pour tes réponses"
                 )
                 # Mettre à jour llm_model dans session_state
                 st.session_state.llm_model = WORKING_MODELS[model_choice]
                 st.session_state.current_model = WORKING_MODELS[model_choice]
             with col2:
-                web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, help="Active la recherche web pour des réponses plus complètes")
+                web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, key="web_normal", help="Active la recherche web pour des réponses plus complètes")
                 # Toggle pour le mode local
                 local_mode_toggle = st.checkbox(
                     "🏠 **Mode Local (Qwen 1.5B)**", 
                     value=st.session_state.local_mode, 
+                    key="local_normal",
                     help="Active le modèle local Qwen 1.5B pour les tâches complexes quand l'API est surchargée"
                 )
                 if local_mode_toggle != st.session_state.local_mode:
@@ -5117,6 +5244,398 @@ def main():
                                 st.error(f"❌ Erreur chargement modèle local: {e}")
                                 st.session_state.local_mode = False
                     st.rerun()
+        
+        # Initialiser historique chat normal séparé
+        if 'chat_history_normal' not in st.session_state:
+            st.session_state.chat_history_normal = []
+        
+        # Zone de chat avec design amélioré
+        st.markdown('<div class="kibali-chat-card">', unsafe_allow_html=True)
+        
+        chat_container = st.container()
+        
+        with chat_container:
+            for message in st.session_state.chat_history_normal:
+                if message["role"] == "user":
+                    with st.chat_message("user", avatar="👤"):
+                        st.markdown(message["content"])
+                else:
+                    # Message assistant avec avatar K personnalisé
+                    with st.chat_message("assistant", avatar="🤖"):
+                        st.markdown(message.get("content", ""))
+        
+        # Afficher les boutons de téléchargement pour les PDFs générés
+        if 'generated_pdfs' in st.session_state and st.session_state.generated_pdfs:
+            st.markdown("---")
+            st.markdown("### 📥 Documents PDF disponibles")
+            
+            for idx, pdf_info in enumerate(st.session_state.generated_pdfs):
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown(f"""
+**📄 {pdf_info['topic'][:50]}**  
+📏 {pdf_info['pages']} pages • 💾 {pdf_info['size_kb']:.1f} KB
+""")
+                
+                with col2:
+                    st.download_button(
+                        label="📥 Télécharger",
+                        data=pdf_info['data'],
+                        file_name=pdf_info['filename'],
+                        mime="application/pdf",
+                        key=f"download_pdf_{idx}"
+                    )
+        
+        # Input de chat
+        if prompt := st.chat_input("💭 Pose ta question ici... (Chat sans fichiers)", key="chat_input_normal"):
+            # Ajouter au chat normal
+            st.session_state.chat_history_normal.append({"role": "user", "content": prompt})
+            
+            # Enrichir le prompt avec le contexte des conversations passées
+            enriched_prompt = prompt
+            conversation_context = ""
+            
+            try:
+                from chat_memory import get_conversation_context
+                conversation_context = get_conversation_context(prompt, st.session_state.chat_vectordb)
+                if conversation_context:
+                    enriched_prompt = f"""📚 **Contexte de conversations précédentes:**
+{conversation_context}
+
+---
+QUESTION ACTUELLE: {prompt}"""
+            except Exception as e:
+                print(f"⚠️ Erreur récupération contexte mémoire: {e}")
+            
+            # 🎯 ANALYSE INTELLIGENTE DE L'INTENTION AVEC LES OUTILS
+            question_lower = prompt.lower()
+            
+            # Détecter EXPLICITEMENT une demande de PDF (doit être très explicite)
+            explicit_pdf_request = False
+            if PDF_GENERATOR_AVAILABLE:
+                import re
+                # Exclusions : questions sur les capacités de l'IA
+                exclusion_patterns = [
+                    r'capable de',
+                    r'peut (faire|générer)',
+                    r'comment (avoir|obtenir|gagner)',
+                    r'il y a',
+                    r'existe',
+                    r'qui (fait|peut)',
+                ]
+                is_capability_question = any(re.search(pattern, question_lower) for pattern in exclusion_patterns)
+                
+                if not is_capability_question:
+                    # Patterns TRÈS spécifiques : verbe d'action PUIS format
+                    pdf_patterns = [
+                        r'^(fais|fait|génère|crée|rédige)\s+(moi\s+)?(un|le)\s+(pdf|rapport|document|livre|mémoire)',
+                        r'(génère|crée|rédige|écris)\s+.{0,30}(pdf|rapport|livre)',
+                        r'génération\s+de\s+(pdf|document)',
+                    ]
+                    explicit_pdf_request = any(re.search(pattern, question_lower) for pattern in pdf_patterns)
+            
+            if explicit_pdf_request:
+                # GÉNÉRATION DE PDF EXPLICITE
+                import re
+                from outils.pdf_generator_tool import generate_massive_pdf
+                
+                # Extraire le nombre de pages
+                num_pages = 30  # défaut
+                numbers_found = re.findall(r'\b(\d+)\b', prompt)
+                for num_str in numbers_found:
+                    n = int(num_str)
+                    if 10 <= n <= 500:
+                        num_pages = n
+                        break
+                
+                # Extraire le sujet
+                topic_patterns = [
+                    r'sur\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+                    r'sur\s+(.+)',
+                    r'de\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+                ]
+                
+                topic = "Sujet non spécifié"
+                for pattern in topic_patterns:
+                    match = re.search(pattern, prompt, re.IGNORECASE)
+                    if match:
+                        topic = match.group(1).strip()
+                        break
+                
+                # Afficher le plan
+                with st.expander("📋 Plan de Génération PDF", expanded=True):
+                    st.markdown(f"""
+                    ### 📄 Génération de Document Massif
+                    
+                    **Sujet:** {topic}
+                    **Pages:** {num_pages}
+                    **Modèle:** {WORKING_MODELS[model_choice]}
+                    """)
+                
+                # Barre de progression
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                def update_progress(step, total, message):
+                    progress_bar.progress(step / total)
+                    status_text.text(f"⚡ {message} ({step}%)")
+                
+                try:
+                    # Générer le PDF
+                    client = create_client()
+                    pdf_bytes = generate_massive_pdf(
+                        topic=topic,
+                        num_pages=num_pages,
+                        client=client,
+                        model_name=WORKING_MODELS[model_choice],
+                        progress_callback=update_progress
+                    )
+                    
+                    # Succès!
+                    progress_bar.progress(100)
+                    status_text.text("✅ PDF généré avec succès!")
+                    
+                    # Stocker le PDF dans session_state pour affichage persistant
+                    if 'generated_pdfs' not in st.session_state:
+                        st.session_state.generated_pdfs = []
+                    
+                    st.session_state.generated_pdfs.append({
+                        'data': pdf_bytes,
+                        'filename': f"{topic[:30].replace('/', '_')}__{num_pages}pages.pdf",
+                        'topic': topic,
+                        'pages': num_pages,
+                        'size_kb': len(pdf_bytes) / 1024
+                    })
+                    
+                    response = f"""✅ **Document PDF généré avec succès!**
+
+📊 **Détails:**
+- 📄 **Sujet:** {topic}
+- 📏 **Pages:** {num_pages}
+- 💾 **Taille:** {len(pdf_bytes) / 1024:.1f} KB
+
+Cliquez sur le bouton ci-dessous pour télécharger votre document!"""
+                    
+                    st.session_state.chat_history_normal.append({"role": "assistant", "content": response})
+                    st.rerun()
+                    
+                except Exception as e:
+                    error_msg = f"❌ Erreur génération PDF: {e}"
+                    st.session_state.chat_history_normal.append({"role": "assistant", "content": error_msg})
+                    st.rerun()
+            
+            # Génération de la réponse avec outils
+            else:
+                with st.spinner("🤖 Génération de la réponse..."):
+                    try:
+                        client = create_client()
+                        response = ""
+                        
+                        # Recherche web si activée
+                        web_context = ""
+                        if web_enabled:
+                            try:
+                                web_results = enhanced_web_search(prompt, max_results=3)
+                                if web_results:
+                                    web_context = "\n\n📚 **Informations web:**\n"
+                                    for r in web_results[:3]:
+                                        web_context += f"- {r.get('title', '')}: {r.get('body', '')[:200]}...\n"
+                            except:
+                                pass
+                        
+                        # Recherche RAG si vectordb disponible
+                        rag_context = ""
+                        has_local_info = False
+                        rag_docs = []
+                        if st.session_state.vectordb:
+                            try:
+                                rag_docs = st.session_state.vectordb.similarity_search(prompt, k=5)
+                                if rag_docs:
+                                    has_local_info = True
+                                    rag_context = "\n\n📄 **Documents PDF locaux pertinents:**\n"
+                                    for i, doc in enumerate(rag_docs[:3], 1):
+                                        content_preview = doc.page_content[:300].replace('\n', ' ')
+                                        rag_context += f"{i}. {content_preview}...\n\n"
+                            except Exception as e:
+                                print(f"⚠️ Erreur recherche RAG: {e}")
+                        
+                        # 🧠 ANALYSE INTELLIGENTE: L'IA doit-elle utiliser des outils?
+                        needs_tool_analysis = False
+                        tool_suggestions = []
+                        
+                        # Si question sur documents ET pas d'info locale → suggérer recherche PDF
+                        if any(kw in prompt.lower() for kw in ['document', 'pdf', 'rapport', 'selon', 'd\'après', 'dans les fichiers']):
+                            if has_local_info:
+                                tool_suggestions.append("📄 documents PDF trouvés")
+                            else:
+                                needs_tool_analysis = True
+                                tool_suggestions.append("⚠️ aucun document pertinent trouvé")
+                        
+                        # Si pas d'info locale ET question factuelle → suggérer recherche web
+                        elif not has_local_info and any(kw in prompt.lower() for kw in ['comment', 'pourquoi', 'qu\'est-ce', 'c\'est quoi', 'explique', 'définition', 'qui est']):
+                            needs_tool_analysis = True
+                            tool_suggestions.append("🌐 recherche web recommandée")
+                        
+                        # Si mention de calculs → outil math
+                        if any(kw in prompt.lower() for kw in ['calcul', 'calculer', 'combien', 'total', 'moyenne', 'somme']):
+                            needs_tool_analysis = True
+                            tool_suggestions.append("calculatrice recommandée")
+                        
+                        # Si mention de traduction
+                        if any(kw in prompt.lower() for kw in ['traduis', 'traduire', 'translation', 'en anglais', 'en français']):
+                            needs_tool_analysis = True
+                            tool_suggestions.append("traduction recommandée")
+                        
+                        # Si mention de code
+                        if any(kw in prompt.lower() for kw in ['code', 'fonction', 'script', 'programme', 'algorithme']):
+                            needs_tool_analysis = True
+                            tool_suggestions.append("générateur de code recommandé")
+                        
+                        # Construire le prompt final avec INSTRUCTIONS D'AUTONOMIE
+                        final_prompt = enriched_prompt
+                        if web_context:
+                            final_prompt += web_context
+                        if rag_context:
+                            final_prompt += rag_context
+                        
+                        # Ajouter instructions d'autonomie si outils disponibles
+                        if needs_tool_analysis and tool_suggestions:
+                            final_prompt += f"\n\n⚙️ **ANALYSE SYSTÈME:** {', '.join(tool_suggestions)}\n"
+                        
+                        # 🔧 UTILISATION INTELLIGENTE DES OUTILS
+                        tools_info_display = ""
+                        tools_used = []
+                        if TOOLS_SYSTEM_AVAILABLE and st.session_state.tool_manager:
+                            tool_context = {
+                                'has_pdfs': st.session_state.vectordb is not None,
+                                'vectordb_available': st.session_state.vectordb is not None,
+                                'vectordb': st.session_state.vectordb,  # Passer la vectordb directement
+                                'rag_docs': rag_docs,  # Passer les docs déjà trouvés
+                                'web_enabled': web_enabled,
+                                'has_local_info': has_local_info,
+                                'query': prompt
+                            }
+                            
+                            # Sélectionner les outils pertinents
+                            selected_tools = st.session_state.tool_manager.get_relevant_tools(final_prompt, tool_context, max_tools=2)
+                            
+                            if selected_tools:
+                                tools_used = [tool.name for tool in selected_tools]
+                                
+                                # Exécuter les outils EN ARRIÈRE-PLAN
+                                tool_results = []
+                                for tool in selected_tools:
+                                    try:
+                                        result = tool.execute(prompt, tool_context)
+                                        if result and result.get('success'):
+                                            tool_output = result.get('output', result.get('content', ''))
+                                            if tool_output:
+                                                tool_results.append(f"🔧 **{tool.name}:** {str(tool_output)[:500]}")
+                                    except Exception as e:
+                                        print(f"⚠️ Erreur outil {tool.name}: {e}")
+                                
+                                if tool_results:
+                                    final_prompt += "\n\n🔧 **Informations des outils:**\n" + "\n".join(tool_results)
+                        
+                        # Appel API avec STREAMING et PROMPT SYSTÈME INTELLIGENT
+                        with chat_container:
+                            with st.chat_message("assistant", avatar="🤖"):
+                                # Afficher les outils utilisés si disponibles
+                                if tools_used:
+                                    st.caption(f"🔧 Outils: {', '.join(tools_used)}")
+                                
+                                message_placeholder = st.empty()
+                                full_response = ""
+                                
+                                # 🧠 PROMPT SYSTÈME pour plus d'autonomie
+                                system_instructions = """Tu es Kibali, un assistant IA multimodal intelligent et autonome.
+
+COMPORTEMENT AUTONOME:
+1. Si tu n'as pas l'information dans ton contexte, INDIQUE-LE clairement
+2. Suggère des outils pertinents ("Je peux rechercher sur le web", "Je peux calculer ça")
+3. Utilise les informations des outils fournis dans le contexte
+4. Sois proactif: anticipe les besoins de l'utilisateur
+
+OUTILS DISPONIBLES:
+- 🌐 Recherche web (pour infos récentes/factuelles)
+- 🔢 Calculatrice (pour calculs mathématiques)
+- 📄 Recherche documents (PDFs locaux)
+- 🖼️ Analyse d'images
+- 🌍 Traduction
+- 💻 Génération de code
+- 📊 Gestion Excel
+- 📸 Optimisation photogrammétrie
+- 📄 Génération de PDF (rapports, livres)
+
+RÈGLES:
+- Réponds toujours en français de manière claire et structurée
+- Utilise les informations du contexte fourni
+- Si manque d'info: "Je n'ai pas cette information dans ma base, mais je peux [suggérer outil]"
+- Sois concis mais complet
+
+"""
+                                
+                                messages_for_api = [
+                                    {"role": "system", "content": system_instructions},
+                                    {"role": "user", "content": final_prompt[:7000]}
+                                ]
+                                
+                                # Stream de la réponse
+                                stream = client.chat.completions.create(
+                                    model=WORKING_MODELS[model_choice],
+                                    messages=messages_for_api,
+                                    max_tokens=3000,
+                                    temperature=0.7,
+                                    stream=True  # ACTIVER LE STREAMING
+                                )
+                                
+                                for chunk in stream:
+                                    if chunk.choices[0].delta.content:
+                                        full_response += chunk.choices[0].delta.content
+                                        message_placeholder.markdown(full_response + "▌")
+                                
+                                message_placeholder.markdown(full_response)
+                        
+                        # Ajouter au chat
+                        st.session_state.chat_history_normal.append({"role": "assistant", "content": full_response})
+                        
+                        # Sauvegarder dans mémoire vectorielle
+                        try:
+                            from chat_memory import save_to_conversation_memory
+                            save_to_conversation_memory(prompt, full_response, st.session_state.chat_vectordb)
+                        except:
+                            pass
+                        
+                        st.rerun()
+                        
+                    except Exception as e:
+                        error_msg = f"❌ Erreur: {str(e)}"
+                        st.session_state.chat_history_normal.append({"role": "assistant", "content": error_msg})
+                        st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # ===============================================
+    # Onglet Chat Fichiers: Analyse de documents et médias
+    # ===============================================
+    with tab_files:
+        # Contrôles compacts dans un expander
+        with st.expander("⚙️ Configuration", expanded=False):
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                model_choice = st.selectbox(
+                    "🎯 **Modèle IA**",
+                    options=list(WORKING_MODELS.keys()),
+                    index=0,
+                    key="model_select_files",
+                    help="Choisis le modèle d'IA pour tes réponses"
+                )
+                # Mettre à jour llm_model dans session_state
+                st.session_state.llm_model = WORKING_MODELS[model_choice]
+                st.session_state.current_model = WORKING_MODELS[model_choice]
+            with col2:
+                web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, key="web_files", help="Active la recherche web pour des réponses plus complètes")
         
         # Analyser automatiquement les médias uploadés (avant le chat_input)
         # media_analysis_results = []  # Maintenant global dans session_state
@@ -5233,7 +5752,8 @@ def main():
                                 # Charger l'embedding model
                                 embedding_model = HuggingFaceEmbeddings(
                                     model_name="sentence-transformers/all-MiniLM-L6-v2",
-                                    cache_folder=str(SENTENCE_TRANSFORMER_CACHE)
+                                    cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
+                                    model_kwargs={'device': 'cpu', 'trust_remote_code': True}
                                 )
                                 
                                 # Chunker le texte
@@ -5296,8 +5816,23 @@ def main():
                             # 🧠 AUTO-APPRENTISSAGE: Apprendre du PDF
                             if AUTO_LEARNING_AVAILABLE and st.session_state.get('auto_learning'):
                                 with st.spinner("🧠 Apprentissage du contenu..."):
-                                    if st.session_state.auto_learning.learn_from_pdf(pdf_info):
-                                        st.success("✅ Connaissances intégrées au système d'apprentissage!")
+                                    learn_result = st.session_state.auto_learning.learn_from_pdf(
+                                        pdf_text,
+                                        {"filename": uploaded_file.name, "pages": pdf_pages}
+                                    )
+                                    if learn_result['status'] == 'learned':
+                                        st.success(f"✅ {learn_result['concepts_extracted']} concepts extraits!")
+                                        
+                                        # Stocker aussi dans le knowledge manager
+                                        if st.session_state.get('knowledge_manager'):
+                                            st.session_state.knowledge_manager.store_pattern(
+                                                "document_patterns",
+                                                {
+                                                    "source": uploaded_file.name,
+                                                    "type": "pdf",
+                                                    "concepts_count": learn_result['concepts_extracted']
+                                                }
+                                            )
                             
                             # 5. Message de succès avec panneau d'outils
                             tools_panel_html = f'''
@@ -5592,7 +6127,7 @@ def main():
                             # 📊 Afficher le DataFrame si disponible
                             if extracted_df is not None and not extracted_df.empty:
                                 st.markdown("### 📊 Données Extraites et Structurées")
-                                st.dataframe(extracted_df.head(50), use_container_width=True)
+                                st.dataframe(extracted_df.head(50), width="stretch")
                                 
                                 # Statistiques sur le DataFrame
                                 st.markdown(f"""
@@ -5614,8 +6149,22 @@ def main():
                             # 🧠 AUTO-APPRENTISSAGE: Apprendre du fichier binaire
                             if AUTO_LEARNING_AVAILABLE and st.session_state.get('auto_learning'):
                                 with st.spinner("🧠 Apprentissage du fichier binaire..."):
-                                    if st.session_state.auto_learning.learn_from_binary(binary_info_complete):
-                                        st.success("✅ Analyse binaire intégrée au système!")
+                                    learn_result = st.session_state.auto_learning.learn_from_binary(
+                                        binary_info_complete
+                                    )
+                                    if learn_result['status'] == 'learned':
+                                        st.success(f"✅ Fichier {learn_result['file_type']} analysé!")
+                                        
+                                        # Stocker dans knowledge manager
+                                        if st.session_state.get('knowledge_manager'):
+                                            st.session_state.knowledge_manager.store_pattern(
+                                                "document_patterns",
+                                                {
+                                                    "source": binary_info_complete['filename'],
+                                                    "type": "binary",
+                                                    "file_type": learn_result['file_type']
+                                                }
+                                            )
                             
                         except Exception as e:
                             error_msg = f"❌ Erreur lors de l'analyse du fichier: {str(e)}"
@@ -6160,6 +6709,29 @@ Réponds de manière structurée et professionnelle:"""
                     with st.chat_message("assistant", avatar="🗺️"):
                         st.markdown(message.get("content", ""))
         
+        # Afficher les boutons de téléchargement pour les PDFs générés
+        if 'generated_pdfs' in st.session_state and st.session_state.generated_pdfs:
+            st.markdown("---")
+            st.markdown("### 📥 Documents PDF disponibles")
+            
+            for idx, pdf_info in enumerate(st.session_state.generated_pdfs):
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown(f"""
+**📄 {pdf_info['topic'][:50]}**  
+📏 {pdf_info['pages']} pages • 💾 {pdf_info['size_kb']:.1f} KB
+""")
+                
+                with col2:
+                    st.download_button(
+                        label="📥 Télécharger",
+                        data=pdf_info['data'],
+                        file_name=pdf_info['filename'],
+                        mime="application/pdf",
+                        key=f"download_pdf_files_{idx}"
+                    )
+        
         # Input de chat stylisé - TOUJOURS EN BAS
         if prompt := st.chat_input("💭 Pose ta question ici...", key="chat_input"):
             # Initialiser la variable response
@@ -6251,13 +6823,35 @@ QUESTION UTILISATEUR: {prompt}"""
             needs_data_extraction = any(kw in question_lower for kw in ['données', 'valeurs', 'liste', 'extrait', 'montre', 'affiche', 'trouve'])
             needs_conversion = any(kw in question_lower for kw in ['convertis', 'convert', 'numpy', 'tableau', 'dataframe', 'pandas', 'csv', 'json', 'extraction'])
             needs_ert_analysis = any(kw in question_lower for kw in ['ert', 'résistivité', 'resistivité', 'géophysique', 'forage', 'nappe', 'aquifère', 'eau souterraine'])
-            # Détection PDF: mots action + format (nombre optionnel)
-            needs_pdf_generation = any(kw in question_lower for kw in ['rédige', 'génère', 'crée', 'écris', 'fait']) and any(kw in question_lower for kw in ['pdf', 'rapport', 'document', 'thèse', 'livre', 'mémoire'])
             
-            # 📄 GÉNÉRATION DE PDF MASSIF (20-500 PAGES)
-            if needs_pdf_generation:
+            # Détection PDF EXPLICITE: patterns très spécifiques uniquement
+            explicit_pdf_request = False
+            if PDF_GENERATOR_AVAILABLE:
                 import re
-                from pdf_generator_tool import generate_massive_pdf
+                # Exclusions : questions sur les capacités de l'IA
+                exclusion_patterns = [
+                    r'capable de',
+                    r'peut (faire|générer)',
+                    r'comment (avoir|obtenir|gagner)',
+                    r'il y a',
+                    r'existe',
+                    r'qui (fait|peut)',
+                ]
+                is_capability_question = any(re.search(pattern, question_lower) for pattern in exclusion_patterns)
+                
+                if not is_capability_question:
+                    # Patterns TRÈS spécifiques : verbe d'action PUIS format
+                    pdf_patterns = [
+                        r'^(fais|fait|génère|crée|rédige)\s+(moi\s+)?(un|le)\s+(pdf|rapport|document|livre|mémoire)',
+                        r'(génère|crée|rédige|écris)\s+.{0,30}(pdf|rapport|livre)',
+                        r'génération\s+de\s+(pdf|document)',
+                    ]
+                    explicit_pdf_request = any(re.search(pattern, question_lower) for pattern in pdf_patterns)
+            
+            # 📄 GÉNÉRATION DE PDF MASSIF (20-500 PAGES) - SEULEMENT SI EXPLICITE
+            if explicit_pdf_request:
+                import re
+                from outils.pdf_generator_tool import generate_massive_pdf
                 
                 # Extraire le nombre de pages
                 num_pages = 30  # défaut
@@ -6324,13 +6918,17 @@ QUESTION UTILISATEUR: {prompt}"""
                     progress_bar.progress(100)
                     status_text.text("✅ PDF généré avec succès!")
                     
-                    # Bouton de téléchargement
-                    st.download_button(
-                        label="📥 Télécharger le PDF",
-                        data=pdf_bytes,
-                        file_name=f"{topic[:30]}__{num_pages}pages.pdf",
-                        mime="application/pdf"
-                    )
+                    # Stocker le PDF dans session_state pour affichage persistant
+                    if 'generated_pdfs' not in st.session_state:
+                        st.session_state.generated_pdfs = []
+                    
+                    st.session_state.generated_pdfs.append({
+                        'data': pdf_bytes,
+                        'filename': f"{topic[:30].replace('/', '_')}__{num_pages}pages.pdf",
+                        'topic': topic,
+                        'pages': num_pages,
+                        'size_kb': len(pdf_bytes) / 1024
+                    })
                     
                     # Afficher les statistiques
                     col1, col2, col3 = st.columns(3)
@@ -6359,7 +6957,7 @@ QUESTION UTILISATEUR: {prompt}"""
 - ✅ Conclusion synthétique
 - ✅ Mise en page professionnelle
 
-Cliquez sur le bouton ci-dessus pour télécharger votre document!"""
+Cliquez sur le bouton ci-dessous pour télécharger votre document!"""
                     
                     st.session_state.chat_history.append({"role": "assistant", "content": response})
                     
@@ -6787,7 +7385,7 @@ Sois précis, technique et référence les documents quand pertinent."""
                                     for material, count in sorted(interp_summary.items(), 
                                                                  key=lambda x: x[1], reverse=True)
                                 ])
-                                st.dataframe(df_interp, use_container_width=True)
+                                st.dataframe(df_interp, width="stretch")
                             
                             # Zones cibles pour forage
                             target_zones = result['target_zones']
@@ -6796,7 +7394,7 @@ Sois précis, technique et référence les documents quand pertinent."""
                                 st.success(f"✅ **{len(target_zones)} zones cibles identifiées** (50-300 Ω·m)")
                                 
                                 df_targets = pd.DataFrame(target_zones)
-                                st.dataframe(df_targets, use_container_width=True)
+                                st.dataframe(df_targets, width="stretch")
                                 
                                 st.info("""
                                 **Recommandations:**
@@ -6820,7 +7418,7 @@ Sois précis, technique et référence les documents quand pertinent."""
                             
                             # DataFrame complet
                             with st.expander("📊 Données Brutes"):
-                                st.dataframe(result['dataframe'], use_container_width=True)
+                                st.dataframe(result['dataframe'], width="stretch")
                             
                             # 💾 STOCKER LES RÉSULTATS ERT POUR ANALYSE CONVERSATIONNELLE
                             if 'ert_analysis' not in st.session_state:
@@ -6963,7 +7561,7 @@ Je peux maintenant analyser chaque détail de ces résultats avec vous ! 🚀"""
                         
                         # DataFrame preview
                         st.markdown("#### 🔍 Aperçu des Données")
-                        st.dataframe(df.head(50), use_container_width=True)
+                        st.dataframe(df.head(50), width="stretch")
                         
                         # Statistiques
                         st.markdown("#### 📈 Statistiques")
@@ -7571,7 +8169,7 @@ QUESTION: {prompt}
             if 'precomputed_results' in locals() and 'dataframe_stats' in precomputed_results:
                 with chat_container:
                     st.markdown("### 📊 Tableau des Statistiques")
-                    st.dataframe(precomputed_results['dataframe_stats'], use_container_width=True)
+                    st.dataframe(precomputed_results['dataframe_stats'], width="stretch")
             
             # 🎼 ORCHESTRATION MULTI-IA
             orchestration_plan = None
@@ -8210,7 +8808,39 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
             # 🤖 AUTO-APPRENTISSAGE: Apprendre de la conversation
             if AUTO_LEARNING_AVAILABLE and st.session_state.get('auto_learning'):
                 try:
-                    st.session_state.auto_learning.learn_from_conversation(prompt, response)
+                    # Déterminer les outils utilisés
+                    tools_used = []
+                    if 'tool_used' in locals() and tool_used:
+                        tools_used.append(tool_used)
+                    
+                    learn_result = st.session_state.auto_learning.learn_from_conversation(
+                        prompt, 
+                        response,
+                        {"tools_used": tools_used, "has_context": bool(context_doc)}
+                    )
+                    
+                    # Stocker les patterns dans knowledge manager
+                    if learn_result['status'] == 'learned' and st.session_state.get('knowledge_manager'):
+                        # Pattern de requête
+                        st.session_state.knowledge_manager.store_pattern(
+                            "query_patterns",
+                            {"query": prompt[:200], "tools": tools_used}
+                        )
+                        
+                        # Pattern de réponse si succès
+                        if len(response) > 100:
+                            st.session_state.knowledge_manager.store_pattern(
+                                "response_patterns",
+                                {"response_type": "detailed", "length": len(response)}
+                            )
+                        
+                        # Pattern d'outil si utilisé
+                        if tools_used:
+                            for tool in tools_used:
+                                st.session_state.knowledge_manager.store_pattern(
+                                    "tool_patterns",
+                                    {"tool_name": tool, "query_type": prompt[:50]}
+                                )
                 except Exception as e:
                     print(f"⚠️ Erreur apprentissage conversation: {e}")
             
@@ -8340,7 +8970,7 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                             carte_buf.seek(0)
                             image = Image.open(carte_buf)
                             st.markdown('<div class="kibali-card zoom-image">', unsafe_allow_html=True)
-                            st.image(image, caption="🗺️ Carte du trajet calculé", use_container_width=True)
+                            st.image(image, caption="🗺️ Carte du trajet calculé", width="stretch")
                             st.markdown('</div>', unsafe_allow_html=True)
                             st.session_state.last_traj_info = traj_info
                         st.session_state.last_reponse = reponse
@@ -8445,7 +9075,7 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                         for i, (img, caption) in enumerate(zip(proc_images, ['Image Originale'] + ['Analyse'] * (len(proc_images)-1))):
                             with cols[i % len(cols)]:
                                 st.markdown('<div class="zoom-image">', unsafe_allow_html=True)
-                                st.image(img, caption=f"📸 {caption}", use_container_width=True)
+                                st.image(img, caption=f"📸 {caption}", width="stretch")
                                 st.markdown('</div>', unsafe_allow_html=True)
                     st.markdown('</div>', unsafe_allow_html=True)
                     
@@ -8661,7 +9291,7 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                 st.markdown('</div>', unsafe_allow_html=True)
                 
                 # Bouton de classification IA
-                if st.button("🚀 **Analyser et Classer avec l'IA**", type="primary", use_container_width=True):
+                if st.button("🚀 **Analyser et Classer avec l'IA**", type="primary", width="stretch"):
                     try:
                         import tempfile
                         import shutil
@@ -8743,7 +9373,7 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                         if viz_path and Path(viz_path).exists():
                             st.markdown('<div class="kibali-card">', unsafe_allow_html=True)
                             st.markdown("### 📊 Visualisation de l'ordre")
-                            st.image(viz_path, caption="Ordre optimisé des photos (gauche → droite, haut → bas)", use_container_width=True)
+                            st.image(viz_path, caption="Ordre optimisé des photos (gauche → droite, haut → bas)", width="stretch")
                             st.markdown('</div>', unsafe_allow_html=True)
                         
                         # Copier les photos dans l'ordre
@@ -8834,7 +9464,7 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                             label_visibility="collapsed"
                         )
                     with col2:
-                        send_btn = st.button("📤 Envoyer", key="send_classification_command", use_container_width=True)
+                        send_btn = st.button("📤 Envoyer", key="send_classification_command", width="stretch")
                     
                     if send_btn and user_prompt:
                         # Ajouter le message utilisateur
@@ -9252,7 +9882,7 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                         use_gpu_3d = st.checkbox("⚡ Utiliser GPU", value=True, 
                                                   help="RTX 5090 recommandée pour MVS")
                     
-                    if st.button("🚀 **Générer Modèle 3D**", type="primary", use_container_width=True, key="colmap_btn"):
+                    if st.button("🚀 **Générer Modèle 3D**", type="primary", width="stretch", key="colmap_btn"):
                         with st.spinner("🔍 Lancement de COLMAP... Cela peut prendre 15-45 minutes..."):
                             try:
                                 from outils.colmap_photogrammetry import ColmapPhotogrammetry
@@ -9352,7 +9982,7 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                 st.markdown('</div>', unsafe_allow_html=True)
                 
                 # Bouton d'optimisation
-                if st.button("🚀 **Optimiser le dataset**", type="primary", use_container_width=True):
+                if st.button("🚀 **Optimiser le dataset**", type="primary", width="stretch"):
                     with st.spinner("🔍 Analyse des photos en cours..."):
                         try:
                             import tempfile
@@ -9471,13 +10101,16 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
             tools = st.session_state.tool_manager.tools
             if tools:
                 tool_data = []
-                for tool in tools:
+                # tools est un dictionnaire {nom: outil}
+                for tool_name, tool_obj in tools.items():
                     tool_data.append({
-                        "Nom": tool.name,
-                        "Description": tool.description,
-                        "Capacités": ", ".join(tool.capabilities)
+                        "Nom": tool_name,
+                        "Description": tool_obj.description,
+                        "Capacités": ", ".join(tool_obj.capabilities) if hasattr(tool_obj, 'capabilities') else "N/A"
                     })
-                st.dataframe(pd.DataFrame(tool_data), use_container_width=True)
+                # Import pandas localement si nécessaire
+                import pandas as pd
+                st.dataframe(pd.DataFrame(tool_data), width="stretch")
             else:
                 st.warning("⚠️ Aucun outil chargé")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -9496,7 +10129,8 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                 )
             
             with col_test2:
-                available_tools = [tool.name for tool in tools] if tools else []
+                # tools est un dictionnaire {nom: outil}
+                available_tools = list(tools.keys()) if tools else []
                 selected_tool_name = st.selectbox(
                     "🔧 **Outil à tester**",
                     options=["Auto (détection)"] + available_tools,
@@ -9585,7 +10219,12 @@ Réponds en utilisant toutes les sources disponibles (documents, outils, web) po
                 st.metric("Outils chargés", len(tools) if tools else 0)
             
             with col_stats2:
-                total_capabilities = sum(len(tool.capabilities) for tool in tools) if tools else 0
+                # tools est un dictionnaire {nom: outil}
+                # Certains outils peuvent ne pas avoir l'attribut capabilities
+                total_capabilities = sum(
+                    len(tool_obj.capabilities) if hasattr(tool_obj, 'capabilities') else 0 
+                    for tool_obj in tools.values()
+                ) if tools else 0
                 st.metric("Capacités totales", total_capabilities)
             
             with col_stats3:
@@ -9812,112 +10451,176 @@ if AUTO_LEARNING_AVAILABLE and tab_nano_ai:
     with tab_nano_ai:
         st.markdown("## 🤖 Nano-IA & Système d'Auto-Apprentissage")
         
-        # Toggle pour activer/désactiver l'apprentissage
-        if st.session_state.get('auto_learning'):
-            st.session_state.auto_learning.render_learning_toggle()
+        st.markdown("""
+        Ce système apprend automatiquement de vos conversations, documents PDF et fichiers binaires pour 
+        améliorer ses réponses au fil du temps.
+        """)
         
-        st.markdown("---")
-        
-        # Statistiques d'apprentissage
-        if st.session_state.get('auto_learning'):
-            st.session_state.auto_learning.render_learning_stats()
-        
-        st.markdown("---")
-        
-        # Gestion des domaines
-        st.markdown("### 📚 Domaines d'Expertise")
-        
-        if st.session_state.get('knowledge_manager'):
-            km = st.session_state.knowledge_manager
-            domains = km.list_domains()
+        # Statistiques globales
+        if st.session_state.get('auto_learning') and st.session_state.get('knowledge_manager'):
+            col1, col2 = st.columns(2)
             
-            if domains:
-                col1, col2 = st.columns([2, 1])
+            with col1:
+                st.markdown("### 📊 Statistiques d'Apprentissage")
+                al_stats = st.session_state.auto_learning.get_stats()
                 
-                with col1:
-                    selected_domain = st.selectbox(
-                        "Sélectionner un domaine",
-                        domains,
-                        help="Choisissez un domaine pour voir les détails"
-                    )
+                st.markdown(f"""
+                <div style='
+                    background: linear-gradient(135deg, rgba(0, 255, 136, 0.1), rgba(0, 136, 255, 0.1));
+                    padding: 1.5rem;
+                    border-radius: 10px;
+                    border: 2px solid rgba(0, 255, 136, 0.3);
+                    margin: 1rem 0;
+                '>
+                    <h4 style='color: #00ff88; margin-top: 0;'>🧠 Auto-Learning</h4>
+                    <p><strong>💬 Conversations apprises:</strong> {al_stats['total_conversations']}</p>
+                    <p><strong>📚 Concepts extraits:</strong> {al_stats['total_concepts']}</p>
+                    <p><strong>📁 Fichiers analysés:</strong> {al_stats['total_files_analyzed']}</p>
+                    <p><strong>🎯 Topics uniques:</strong> {al_stats['unique_topics']}</p>
+                    <p><strong>📋 Types de fichiers:</strong> {al_stats['file_types_known']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown("### 🎯 Gestion des Connaissances")
+                km_stats = st.session_state.knowledge_manager.get_stats()
                 
-                with col2:
-                    if st.button("🤖 Créer/Mettre à jour Nano-IA", help="Crée ou met à jour la nano-IA spécialisée"):
-                        with st.spinner(f"Création de la nano-IA pour {selected_domain}..."):
-                            if km.create_nano_ai(selected_domain, force=True):
-                                st.success(f"✅ Nano-IA {selected_domain} créée!")
-                                st.rerun()
-                
-                # Détails du domaine
-                if selected_domain:
-                    expertise = km.get_domain_expertise(selected_domain)
-                    if expertise:
+                st.markdown(f"""
+                <div style='
+                    background: linear-gradient(135deg, rgba(138, 43, 226, 0.1), rgba(255, 0, 136, 0.1));
+                    padding: 1.5rem;
+                    border-radius: 10px;
+                    border: 2px solid rgba(138, 43, 226, 0.3);
+                    margin: 1rem 0;
+                '>
+                    <h4 style='color: #8a2be2; margin-top: 0;'>🗂️ Knowledge Manager</h4>
+                    <p><strong>📋 Patterns totaux:</strong> {km_stats['total_patterns']}</p>
+                    <p><strong>⚖️ Poids moyens:</strong> {km_stats['average_weight']:.2f}</p>
+                    <p><strong>📈 Taux d'apprentissage:</strong> {km_stats['learning_rate']}</p>
+                    <p><strong>📜 Historique:</strong> {km_stats['history_size']} entrées</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Top patterns appris
+        st.markdown("### 🏆 Top Questions Fréquentes")
+        if st.session_state.get('auto_learning'):
+            stats = st.session_state.auto_learning.get_stats()
+            
+            if stats['top_questions']:
+                for i, q in enumerate(stats['top_questions'][:5], 1):
+                    st.markdown(f"""
+                    <div style='background: rgba(255,255,255,0.05); padding: 1rem; 
+                                border-radius: 8px; margin: 0.5rem 0; border-left: 4px solid #00ff88;'>
+                        <strong>{i}. {q['q']}</strong> <span style='color: #888; float: right;'>×{q['count']}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("Aucune question récurrente détectée pour le moment")
+        
+        st.markdown("---")
+        
+        # Top concepts appris
+        st.markdown("### 💡 Concepts Clés Appris")
+        if st.session_state.get('auto_learning'):
+            stats = st.session_state.auto_learning.get_stats()
+            
+            if stats['top_concepts']:
+                concepts_cols = st.columns(5)
+                for i, c in enumerate(stats['top_concepts'][:10]):
+                    with concepts_cols[i % 5]:
                         st.markdown(f"""
-                        <div style='
-                            background: linear-gradient(135deg, rgba(0, 136, 255, 0.1), rgba(138, 43, 226, 0.1));
-                            padding: 1.5rem;
-                            border-radius: 10px;
-                            border: 2px solid rgba(0, 136, 255, 0.3);
-                            margin: 1rem 0;
-                        '>
-                            <h4 style='color: #0088ff; margin-top: 0;'>📊 {selected_domain}</h4>
-                            <p><strong>Documents:</strong> {expertise.documents_count}</p>
-                            <p><strong>Requêtes traitées:</strong> {expertise.queries_handled}</p>
-                            <p><strong>Taux de succès:</strong> {expertise.success_rate*100:.1f}%</p>
-                            <p><strong>Créé:</strong> {expertise.creation_date[:10]}</p>
-                            <p><strong>Dernière MAJ:</strong> {expertise.last_updated[:10]}</p>
+                        <div style='background: rgba(0,136,255,0.1); padding: 0.8rem; 
+                                    border-radius: 8px; text-align: center; margin: 0.3rem 0;'>
+                            <strong style='color: #0088ff;'>{c['concept']}</strong><br>
+                            <small style='color: #888;'>×{c['count']}</small>
                         </div>
                         """, unsafe_allow_html=True)
-                        
-                        # Mots-clés
-                        if expertise.keywords:
-                            st.markdown("**🔑 Mots-clés maîtrisés:**")
-                            st.write(", ".join(expertise.keywords[:20]))
-                        
-                        # Exemples Q&A
-                        if expertise.examples:
-                            st.markdown("**💬 Exemples de conversations:**")
-                            for i, example in enumerate(expertise.examples[-5:], 1):
-                                with st.expander(f"Exemple {i}: {example['query'][:50]}..."):
-                                    st.markdown(f"**Question:** {example['query']}")
-                                    st.markdown(f"**Réponse:** {example['response'][:300]}...")
-                        
-                        # Test du domaine
-                        st.markdown("---")
-                        st.markdown("### 🧪 Tester les connaissances du domaine")
-                        test_query = st.text_input(
-                            "Posez une question sur ce domaine",
-                            placeholder=f"Ex: Qu'as-tu appris sur {selected_domain}?",
-                            key=f"test_query_{selected_domain}"
-                        )
-                        
-                        if test_query:
-                            with st.spinner("Recherche dans les connaissances..."):
-                                results = km.query_domain(test_query, selected_domain, k=3)
-                                
-                                if results:
-                                    st.success(f"✅ {len(results)} résultats trouvés!")
-                                    for i, doc in enumerate(results, 1):
-                                        with st.expander(f"Résultat {i}"):
-                                            st.write(doc.page_content[:500])
-                                            st.caption(f"Source: {doc.metadata.get('filename', 'N/A')}")
-                                else:
-                                    st.warning("Aucun résultat trouvé dans ce domaine")
             else:
-                st.info("👋 Aucun domaine d'expertise créé pour le moment. Uploadez des fichiers pour commencer l'apprentissage!")
+                st.info("Aucun concept extrait pour le moment")
         
-        # Historique d'apprentissage
         st.markdown("---")
-        st.markdown("### 📜 Historique d'Apprentissage")
         
-        if st.session_state.get('learning_history'):
-            history_df = pd.DataFrame(st.session_state.learning_history[-20:])
-            st.dataframe(
-                history_df[['type', 'source', 'domain']],
-                use_container_width=True
-            )
-        else:
-            st.info("L'historique d'apprentissage apparaîtra ici au fur et à mesure")
+        # Top outils utilisés
+        st.markdown("### 🔧 Outils les Plus Utilisés")
+        if st.session_state.get('auto_learning'):
+            stats = st.session_state.auto_learning.get_stats()
+            
+            if stats['top_tools']:
+                for i, t in enumerate(stats['top_tools'][:5], 1):
+                    st.markdown(f"""
+                    <div style='background: rgba(255,215,0,0.1); padding: 1rem; 
+                                border-radius: 8px; margin: 0.5rem 0; border-left: 4px solid #ffd700;'>
+                        <strong>🛠️ {t['tool']}</strong> <span style='color: #888; float: right;'>×{t['count']}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("Aucun outil n'a encore été utilisé")
+        
+        st.markdown("---")
+        
+        # Test du système de suggestions
+        st.markdown("### 🔮 Test de Suggestions Intelligentes")
+        test_query = st.text_input(
+            "Posez une question pour obtenir des suggestions",
+            placeholder="Ex: comment calculer une équation complexe?",
+            key="nano_test_query"
+        )
+        
+        if test_query and st.session_state.get('auto_learning'):
+            with st.spinner("🤖 Analyse et génération de suggestions..."):
+                suggestions = st.session_state.auto_learning.get_suggestions(test_query, top_k=5)
+                
+                if suggestions:
+                    st.success(f"✅ {len(suggestions)} suggestions trouvées!")
+                    
+                    for i, sug in enumerate(suggestions, 1):
+                        stype = sug['type']
+                        icon = {"similar_question": "❓", "concept": "💡", "tool": "🔧"}.get(stype, "📌")
+                        
+                        with st.expander(f"{icon} {stype.replace('_', ' ').title()} (score: {sug['score']:.2f})"):
+                            if stype == "similar_question":
+                                st.markdown(f"**Question similaire:** {sug['question']}")
+                                st.caption(f"Posée {sug['frequency']} fois")
+                            elif stype == "concept":
+                                st.markdown(f"**Concept:** {sug['concept']}")
+                                st.caption(f"Trouvé {sug['frequency']} fois")
+                                if sug.get('contexts'):
+                                    st.markdown("**Contextes:**")
+                                    for ctx in sug['contexts'][:2]:
+                                        st.text(f"• {ctx[:150]}...")
+                            elif stype == "tool":
+                                st.markdown(f"**Outil recommandé:** {sug['tool']}")
+                                st.caption(f"Utilisé {sug['frequency']} fois pour des cas similaires")
+                else:
+                    st.info("Aucune suggestion trouvée pour cette requête")
+        
+        st.markdown("---")
+        
+        # Actions de maintenance
+        st.markdown("### ⚙️ Maintenance et Export")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📤 Exporter Connaissances", help="Exporter toutes les connaissances dans un fichier"):
+                if st.session_state.get('knowledge_manager'):
+                    export_path = st.session_state.knowledge_manager.export_knowledge()
+                    st.success(f"✅ Exporté vers: {export_path.name}")
+        
+        with col2:
+            if st.button("🧹 Appliquer Decay", help="Réduire le poids des patterns anciens non utilisés"):
+                if st.session_state.get('knowledge_manager'):
+                    result = st.session_state.knowledge_manager.decay_old_weights(days_threshold=30)
+                    st.success(f"✅ {result['decayed_count']} patterns décayés")
+        
+        with col3:
+            if st.button("📊 Voir Stats Détaillées", help="Afficher toutes les statistiques"):
+                if st.session_state.get('auto_learning') and st.session_state.get('knowledge_manager'):
+                    st.json({
+                        "auto_learning": st.session_state.auto_learning.get_stats(),
+                        "knowledge_manager": st.session_state.knowledge_manager.get_stats()
+                    })
 
 # ===============================================
 # Messages de fin et documentation

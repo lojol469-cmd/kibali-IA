@@ -20,11 +20,45 @@ CHAT_VECTORDB_PATH = os.path.join(
 
 def get_embedding_model():
     """Obtient le modèle d'embeddings pour la mémoire"""
-    return HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
-        model_kwargs={'device': 'cpu'},
-        encode_kwargs={'normalize_embeddings': True}
-    )
+    import torch
+    import os
+    
+    # Solution simple: utiliser directement SentenceTransformer avec un wrapper minimal
+    try:
+        from sentence_transformers import SentenceTransformer
+        
+        # Charger directement avec SentenceTransformer
+        model = SentenceTransformer(
+            "sentence-transformers/all-MiniLM-L6-v2",
+            device='cpu'
+        )
+        
+        # Créer un wrapper simple qui implémente embed_documents et embed_query
+        class SimpleEmbeddings:
+            def __init__(self, model):
+                self.client = model
+                self.model_name = "sentence-transformers/all-MiniLM-L6-v2"
+            
+            def embed_documents(self, texts):
+                """Encode une liste de documents"""
+                return self.client.encode(texts, normalize_embeddings=True).tolist()
+            
+            def embed_query(self, text):
+                """Encode une requête unique"""
+                return self.client.encode([text], normalize_embeddings=True)[0].tolist()
+            
+            def __call__(self, text):
+                """Permet d'appeler l'objet directement comme une fonction"""
+                if isinstance(text, list):
+                    return self.embed_documents(text)
+                else:
+                    return self.embed_query(text)
+        
+        return SimpleEmbeddings(model)
+        
+    except Exception as e:
+        print(f"⚠️ Erreur chargement embeddings: {e}")
+        return None
 
 def load_chat_vectordb() -> Tuple[Optional[object], str]:
     """
@@ -36,8 +70,12 @@ def load_chat_vectordb() -> Tuple[Optional[object], str]:
     if not os.path.exists(CHAT_VECTORDB_PATH):
         return None, "⚠️ Aucune mémoire de conversation trouvée (sera créée automatiquement)"
     
-    embedding_model = get_embedding_model()
     try:
+        embedding_model = get_embedding_model()
+        
+        if embedding_model is None:
+            return None, "⚠️ Impossible de charger le modèle d'embeddings - mémoire désactivée"
+        
         chat_vectordb = FAISS.load_local(
             CHAT_VECTORDB_PATH, 
             embedding_model, 
@@ -45,7 +83,7 @@ def load_chat_vectordb() -> Tuple[Optional[object], str]:
         )
         return chat_vectordb, "✅ Mémoire de conversation chargée"
     except Exception as e:
-        return None, f"❌ Erreur chargement mémoire: {e}"
+        return None, f"⚠️ Mémoire désactivée: {e}"
 
 def add_to_chat_memory(user_msg: str, ai_msg: str, chat_vectordb: Optional[object]) -> object:
     """

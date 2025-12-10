@@ -26,8 +26,16 @@ class PhotogrammetryOptimizerTool(BaseTool):
     """
     
     def __init__(self):
-        self.name = "photogrammetry_optimizer"
-        self.description = "Optimise les datasets de photogrammétrie en sélectionnant les photos essentielles"
+        self._name = "photogrammetry_optimizer"
+        self._description = "Optimise les datasets de photogrammétrie en sélectionnant les photos essentielles"
+        self._capabilities = [
+            "Réduction intelligente de datasets photo",
+            "Analyse de couverture spatiale",
+            "Détection de photos redondantes",
+            "Optimisation pour reconstruction 3D",
+            "Sélection basée sur les angles de vue",
+            "Clustering de photos similaires"
+        ]
         self.keywords = [
             'photogrammétrie', 'photogrammetrie', 'photos aériennes', 'photos drone',
             'réduire photos', 'optimiser photos', 'sélection photos', 'dataset 3D',
@@ -36,7 +44,19 @@ class PhotogrammetryOptimizerTool(BaseTool):
             'photos similaires', 'coverage optimization', 'image selection'
         ]
     
-    def can_handle(self, user_input: str) -> float:
+    @property
+    def name(self) -> str:
+        return self._name
+    
+    @property
+    def description(self) -> str:
+        return self._description
+    
+    @property
+    def capabilities(self) -> List[str]:
+        return self._capabilities
+    
+    def can_handle(self, user_input: str, context: Dict[str, Any] = None) -> float:
         """Détermine si cet outil peut traiter la requête"""
         user_lower = user_input.lower()
         score = 0.0

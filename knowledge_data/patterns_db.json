@@ -1,0 +1,17 @@
+{
+  "query_patterns": {},
+  "response_patterns": {},
+  "tool_patterns": {
+    "6832685d37677c0e": {
+      "data": {
+        "tool_name": "math_calculator",
+        "query_type": "calculation"
+      },
+      "occurrences": 1,
+      "first_seen": "2025-12-10T17:34:19.904769",
+      "last_seen": "2025-12-10T17:34:19.904769",
+      "feedback_score": 0.0
+    }
+  },
+  "document_patterns": {}
+}

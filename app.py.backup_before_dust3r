@@ -12,6 +12,33 @@ from pathlib import Path
 # ⚠️ FORCER CPU AVANT TOUT IMPORT PYTORCH/TRANSFORMERS
 os.environ['CUDA_VISIBLE_DEVICES'] = ''  # Désactiver CUDA complètement pour éviter erreurs kernel
 os.environ['FORCE_CPU'] = '1'
+os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'  # Éviter les meta tensors
+# NOTE: Ne pas activer HF_HUB_OFFLINE car on utilise l'API HuggingFace pour les requêtes LLM
+# os.environ['TRANSFORMERS_OFFLINE'] = '1'  # Mode offline désactivé pour API
+# os.environ['HF_HUB_OFFLINE'] = '1'  # Mode offline désactivé pour API
+
+# Désactiver complètement les meta tensors et device_map dans PyTorch/Transformers
+os.environ['ACCELERATE_USE_CPU'] = '1'
+os.environ['PYTORCH_NO_CUDA_MEMORY_CACHING'] = '1'
+
+# Optimisations mémoire: activer garbage collection et cache SSD
+import gc
+gc.enable()  # Activer garbage collection automatique
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'  # Fragmenter la mémoire
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # Éviter les deadlocks
+
+# Désactiver le lazy loading dans transformers pour éviter NotImplementedError avec meta tensors
+import sys
+if 'transformers' not in sys.modules:
+    # Patcher avant l'import
+    import importlib
+    def patch_transformers():
+        try:
+            import transformers.modeling_utils
+            transformers.modeling_utils.TORCH_INIT_META = False
+        except:
+            pass
+    patch_transformers()
 
 # Charger le token depuis .env
 from dotenv import load_dotenv
@@ -242,6 +269,15 @@ try:
 except ImportError:
     EXCEL_AI_AVAILABLE = False
     print("⚠️ Excel AI Organizer non disponible")
+
+# Import du générateur de PDF
+try:
+    from pdf_generator_tool import generate_massive_pdf
+    PDF_GENERATOR_AVAILABLE = True
+    print("✅ Générateur de PDF chargé")
+except ImportError:
+    PDF_GENERATOR_AVAILABLE = False
+    print("⚠️ Générateur de PDF non disponible")
 
 try:
     from transformers import pipeline
@@ -702,7 +738,7 @@ def process_pdfs():
     embedding_model = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
-        model_kwargs={'device': 'cpu'},
+        model_kwargs={'device': 'cpu', 'trust_remote_code': True},
         encode_kwargs={'device': 'cpu', 'batch_size': 32}
     )
     text_splitter = RecursiveCharacterTextSplitter(
@@ -782,7 +818,7 @@ def load_vectordb():
         embedding_model = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
             cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
-            model_kwargs={'device': 'cpu'},
+            model_kwargs={'device': 'cpu', 'trust_remote_code': True},
             encode_kwargs={'device': 'cpu', 'batch_size': 32}
         )
         
@@ -1863,7 +1899,12 @@ def final_search(question, vectordb, graph, pois):
 # Fonctions Modèles Hugging Face Spécialisés
 # ===============================================
 def initialize_specialized_models():
-    """Initialise les modèles spécialisés en mode LOCAL uniquement"""
+    """Initialise les modèles spécialisés en mode LOCAL uniquement avec optimisations mémoire"""
+    import torch
+    
+    # Forcer le mode CPU et désactiver device_map
+    torch.set_default_device('cpu')
+    
     models = {}
     
     # Vérifier si pipeline est disponible
@@ -1876,31 +1917,83 @@ def initialize_specialized_models():
             'ner': None
         }
     
-    print("🌐 Mode: LOCAL UNIQUEMENT (pas de téléchargement)")
+    print("🌐 Mode: LOCAL OPTIMISÉ (Quantification + Cache SSD)")
     
     try:
-        models['summarizer'] = pipeline(
-            "summarization", 
-            model=SUMMARIZER_MODEL, 
+        # Charger le modèle avec quantification et mmap pour économiser RAM
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, BitsAndBytesConfig
+        
+        # Configuration de quantification 8-bit pour réduire l'utilisation RAM
+        try:
+            import bitsandbytes
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_enable_fp32_cpu_offload=True
+            )
+            use_quantization = True
+            print("✅ Quantification 8-bit activée (bitsandbytes)")
+        except ImportError:
+            quantization_config = None
+            use_quantization = False
+            print("⚠️ bitsandbytes non disponible, pas de quantification")
+        
+        tokenizer = AutoTokenizer.from_pretrained(
+            SUMMARIZER_MODEL,
             cache_dir=str(SUMMARIZER_CACHE),
-            device_map="auto" if torch.cuda.is_available() else "cpu",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             local_files_only=True
         )
-        print("✅ Summarizer chargé en mode LOCAL")
+        
+        # Charger avec mmap pour utiliser le SSD comme cache
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            SUMMARIZER_MODEL,
+            cache_dir=str(SUMMARIZER_CACHE),
+            local_files_only=True,
+            low_cpu_mem_usage=True,  # Activer mode économie mémoire
+            torch_dtype=torch.float16,  # float16 pour économiser RAM
+            quantization_config=quantization_config if use_quantization else None,
+            use_safetensors=True,  # Utiliser safetensors (plus rapide)
+            device_map='cpu'
+        )
+        
+        models['summarizer'] = pipeline(
+            "summarization",
+            model=model,
+            tokenizer=tokenizer,
+            device='cpu'
+        )
+        print("✅ Summarizer chargé (float16 + mmap cache SSD)")
     except Exception as e:
         print(f"⚠️ Erreur chargement summarizer: {e}")
         models['summarizer'] = None
+    
     try:
-        models['translator'] = pipeline(
-            "translation", 
-            model=TRANSLATOR_MODEL, 
+        # Charger le modèle avec quantification et mmap
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        
+        tokenizer = AutoTokenizer.from_pretrained(
+            TRANSLATOR_MODEL,
             cache_dir=str(TRANSLATOR_CACHE),
-            device_map="auto" if torch.cuda.is_available() else "cpu",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
             local_files_only=True
         )
-        print("✅ Translator chargé en mode LOCAL")
+        
+        # Charger avec mmap pour utiliser le SSD comme cache
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            TRANSLATOR_MODEL,
+            cache_dir=str(TRANSLATOR_CACHE),
+            local_files_only=True,
+            low_cpu_mem_usage=True,  # Activer mode économie mémoire
+            torch_dtype=torch.float16,  # float16 pour économiser RAM
+            use_safetensors=True,  # Utiliser safetensors (plus rapide)
+            device_map='cpu'
+        )
+        
+        models['translator'] = pipeline(
+            "translation",
+            model=model,
+            tokenizer=tokenizer,
+            device='cpu'
+        )
+        print("✅ Translator chargé (float16 + mmap cache SSD)")
     except Exception as e:
         print(f"⚠️ Erreur chargement translator: {e}")
         models['translator'] = None
@@ -1919,19 +2012,47 @@ def initialize_specialized_models():
     return models
 # Initialiser les modèles
 SPECIALIZED_MODELS = initialize_specialized_models()
+
+def clear_memory_cache():
+    """Nettoie le cache mémoire pour libérer la RAM"""
+    import gc
+    import torch
+    
+    # Garbage collection Python
+    gc.collect()
+    
+    # Vider le cache PyTorch (même sur CPU)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    # Forcer le nettoyage des caches transformers
+    try:
+        gc.collect()
+    except:
+        pass
+    
+    return "🧹 Mémoire nettoyée"
+
 def summarize_text(text):
     if SPECIALIZED_MODELS.get('summarizer') is None:
         return "❌ Modèle de résumé non disponible"
     try:
-        return SPECIALIZED_MODELS['summarizer'](text[:1024], max_length=200, min_length=30, do_sample=False)[0]['summary_text']
+        result = SPECIALIZED_MODELS['summarizer'](text[:1024], max_length=200, min_length=30, do_sample=False)[0]['summary_text']
+        clear_memory_cache()  # Nettoyer après utilisation
+        return result
     except Exception as e:
+        clear_memory_cache()
         return f"❌ Erreur résumé: {e}"
+
 def translate_text(text, src_lang="fr", tgt_lang="en"):
     if SPECIALIZED_MODELS.get('translator') is None:
         return "❌ Modèle de traduction non disponible"
     try:
-        return SPECIALIZED_MODELS['translator'](text)[0]['translation_text']
+        result = SPECIALIZED_MODELS['translator'](text)[0]['translation_text']
+        clear_memory_cache()  # Nettoyer après utilisation
+        return result
     except Exception as e:
+        clear_memory_cache()
         return f"❌ Erreur traduction: {e}"
 def generate_detailed_description_with_clip(image_path, vision_models):
     """
@@ -4936,7 +5057,7 @@ def main():
     # ===============================================
     # Onglets avec design fluide
     # ===============================================
-    tab_names = ["⚙️ **Configuration**", "💬 **Chat RAG + Web**", "🗺️ **Trajets**", "📸 **Analyse Image**", "🌐 **Recherche Web**", "📷 **Photogrammétrie**"]
+    tab_names = ["⚙️ **Configuration**", "💬 **Chat Normal**", "📁 **Chat Fichiers**", "🗺️ **Trajets**", "📸 **Analyse Image**", "🌐 **Recherche Web**", "📷 **Photogrammétrie**"]
     
     # Ajouter l'onglet binaire si le gestionnaire est disponible
     if BINARY_HANDLER_AVAILABLE:
@@ -4952,12 +5073,12 @@ def main():
     tabs = st.tabs(tab_names)
     
     # Assignation des onglets
-    tab1, tab2, tab3, tab4, tab5, tab_photo = tabs[:6]
+    tab1, tab2, tab_files, tab3, tab4, tab5, tab_photo = tabs[:7]
     
     # Onglet binaire si disponible
     tab_binary = None
-    current_tab_idx = 6
-    if BINARY_HANDLER_AVAILABLE and len(tabs) > 6:
+    current_tab_idx = 7
+    if BINARY_HANDLER_AVAILABLE and len(tabs) > 7:
         tab_binary = tabs[current_tab_idx]
         current_tab_idx += 1
     
@@ -5076,7 +5197,7 @@ def main():
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ===============================================
-    # Onglet 2: Chat RAG Amélioré avec cartes
+    # Onglet 2: Chat Normal (Sans fichiers)
     # ===============================================
     with tab2:
         # Contrôles compacts dans un expander
@@ -5087,18 +5208,19 @@ def main():
                     "🎯 **Modèle IA**",
                     options=list(WORKING_MODELS.keys()),
                     index=0,
-                    key="model_select",
+                    key="model_select_normal",
                     help="Choisis le modèle d'IA pour tes réponses"
                 )
                 # Mettre à jour llm_model dans session_state
                 st.session_state.llm_model = WORKING_MODELS[model_choice]
                 st.session_state.current_model = WORKING_MODELS[model_choice]
             with col2:
-                web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, help="Active la recherche web pour des réponses plus complètes")
+                web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, key="web_normal", help="Active la recherche web pour des réponses plus complètes")
                 # Toggle pour le mode local
                 local_mode_toggle = st.checkbox(
                     "🏠 **Mode Local (Qwen 1.5B)**", 
                     value=st.session_state.local_mode, 
+                    key="local_normal",
                     help="Active le modèle local Qwen 1.5B pour les tâches complexes quand l'API est surchargée"
                 )
                 if local_mode_toggle != st.session_state.local_mode:
@@ -5117,6 +5239,250 @@ def main():
                                 st.error(f"❌ Erreur chargement modèle local: {e}")
                                 st.session_state.local_mode = False
                     st.rerun()
+        
+        # Initialiser historique chat normal séparé
+        if 'chat_history_normal' not in st.session_state:
+            st.session_state.chat_history_normal = []
+        
+        # Zone de chat avec design amélioré
+        st.markdown('<div class="kibali-chat-card">', unsafe_allow_html=True)
+        
+        chat_container = st.container()
+        
+        with chat_container:
+            for message in st.session_state.chat_history_normal:
+                if message["role"] == "user":
+                    with st.chat_message("user", avatar="👤"):
+                        st.markdown(message["content"])
+                else:
+                    # Message assistant avec avatar K personnalisé
+                    with st.chat_message("assistant", avatar="🤖"):
+                        st.markdown(message.get("content", ""))
+        
+        # Input de chat
+        if prompt := st.chat_input("💭 Pose ta question ici... (Chat sans fichiers)", key="chat_input_normal"):
+            # Ajouter au chat normal
+            st.session_state.chat_history_normal.append({"role": "user", "content": prompt})
+            
+            # Enrichir le prompt avec le contexte des conversations passées
+            enriched_prompt = prompt
+            conversation_context = ""
+            
+            try:
+                from chat_memory import get_conversation_context
+                conversation_context = get_conversation_context(prompt, st.session_state.chat_vectordb)
+                if conversation_context:
+                    enriched_prompt = f"""📚 **Contexte de conversations précédentes:**
+{conversation_context}
+
+---
+QUESTION ACTUELLE: {prompt}"""
+            except Exception as e:
+                print(f"⚠️ Erreur récupération contexte mémoire: {e}")
+            
+            # 🎯 DÉTECTION DE GÉNÉRATION PDF PRIORITAIRE
+            question_lower = prompt.lower()
+            needs_pdf_generation = PDF_GENERATOR_AVAILABLE and any(kw in question_lower for kw in ['rédige', 'génère', 'crée', 'écris', 'fait']) and any(kw in question_lower for kw in ['pdf', 'rapport', 'document', 'thèse', 'livre', 'mémoire'])
+            
+            if needs_pdf_generation:
+                import re
+                
+                # Extraire le nombre de pages
+                num_pages = 30  # défaut
+                numbers_found = re.findall(r'\b(\d+)\b', prompt)
+                for num_str in numbers_found:
+                    n = int(num_str)
+                    if 10 <= n <= 500:
+                        num_pages = n
+                        break
+                
+                # Extraire le sujet
+                topic_patterns = [
+                    r'sur\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+                    r'sur\s+(.+)',
+                    r'de\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+                ]
+                
+                topic = "Sujet non spécifié"
+                for pattern in topic_patterns:
+                    match = re.search(pattern, prompt, re.IGNORECASE)
+                    if match:
+                        topic = match.group(1).strip()
+                        break
+                
+                # Afficher le plan
+                with st.expander("📋 Plan de Génération PDF", expanded=True):
+                    st.markdown(f"""
+                    ### 📄 Génération de Document Massif
+                    
+                    **Sujet:** {topic}
+                    **Pages:** {num_pages}
+                    **Modèle:** {WORKING_MODELS[model_choice]}
+                    """)
+                
+                # Barre de progression
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                def update_progress(step, total, message):
+                    progress_bar.progress(step / total)
+                    status_text.text(f"⚡ {message} ({step}%)")
+                
+                try:
+                    # Générer le PDF
+                    client = create_client()
+                    pdf_bytes = generate_massive_pdf(
+                        topic=topic,
+                        num_pages=num_pages,
+                        client=client,
+                        model_name=WORKING_MODELS[model_choice],
+                        progress_callback=update_progress
+                    )
+                    
+                    # Succès!
+                    progress_bar.progress(100)
+                    status_text.text("✅ PDF généré avec succès!")
+                    
+                    # Bouton de téléchargement
+                    st.download_button(
+                        label="📥 Télécharger le PDF",
+                        data=pdf_bytes,
+                        file_name=f"{topic[:30]}__{num_pages}pages.pdf",
+                        mime="application/pdf"
+                    )
+                    
+                    response = f"""✅ **Document PDF généré avec succès!**
+
+📊 **Détails:**
+- 📄 **Sujet:** {topic}
+- 📏 **Pages:** {num_pages}
+- 💾 **Taille:** {len(pdf_bytes) / 1024:.1f} KB
+
+Cliquez sur le bouton ci-dessus pour télécharger votre document!"""
+                    
+                    st.session_state.chat_history_normal.append({"role": "assistant", "content": response})
+                    st.rerun()
+                    
+                except Exception as e:
+                    error_msg = f"❌ Erreur génération PDF: {e}"
+                    st.session_state.chat_history_normal.append({"role": "assistant", "content": error_msg})
+                    st.rerun()
+            
+            # Génération de la réponse avec outils
+            else:
+                with st.spinner("🤖 Génération de la réponse..."):
+                    try:
+                        client = create_client()
+                        response = ""
+                        
+                        # Recherche web si activée
+                        web_context = ""
+                        if web_enabled:
+                            try:
+                                web_results = enhanced_web_search(prompt, max_results=3)
+                                if web_results:
+                                    web_context = "\n\n📚 **Informations web:**\n"
+                                    for r in web_results[:3]:
+                                        web_context += f"- {r.get('title', '')}: {r.get('body', '')[:200]}...\n"
+                            except:
+                                pass
+                        
+                        # Recherche RAG si vectordb disponible
+                        rag_context = ""
+                        if st.session_state.vectordb:
+                            try:
+                                docs = st.session_state.vectordb.similarity_search(prompt, k=3)
+                                if docs:
+                                    rag_context = "\n\n📄 **Documents pertinents:**\n"
+                                    for doc in docs:
+                                        rag_context += f"- {doc.page_content[:200]}...\n"
+                            except:
+                                pass
+                        
+                        # Construire le prompt final
+                        final_prompt = enriched_prompt
+                        if web_context:
+                            final_prompt += web_context
+                        if rag_context:
+                            final_prompt += rag_context
+                        
+                        # 🔧 UTILISATION DES OUTILS SI DISPONIBLES
+                        if TOOLS_SYSTEM_AVAILABLE and st.session_state.tool_manager:
+                            tool_context = {
+                                'has_pdfs': st.session_state.vectordb is not None,
+                                'vectordb_available': st.session_state.vectordb is not None,
+                                'web_enabled': web_enabled
+                            }
+                            
+                            # Sélectionner les outils pertinents
+                            selected_tools = st.session_state.tool_manager.get_relevant_tools(final_prompt, tool_context)
+                            
+                            if selected_tools:
+                                # Afficher les outils sélectionnés
+                                tools_info = "🔧 **Outils activés:** " + ", ".join([f"**{tool.name}**" for tool in selected_tools]) + "\n\n"
+                                
+                                # Exécuter avec les outils
+                                tool_results = []
+                                for tool in selected_tools:
+                                    try:
+                                        result = tool.func(final_prompt)
+                                        if result:
+                                            tool_results.append(f"**{tool.name}:**\n{result}\n")
+                                    except:
+                                        pass
+                                
+                                if tool_results:
+                                    final_prompt += "\n\n🔧 **Résultats des outils:**\n" + "\n".join(tool_results)
+                        
+                        # Appel API
+                        response_obj = client.chat.completions.create(
+                            model=WORKING_MODELS[model_choice],
+                            messages=[{"role": "user", "content": final_prompt[:8000]}],
+                            max_tokens=3000,
+                            temperature=0.7
+                        )
+                        
+                        response = response_obj.choices[0].message.content
+                        
+                        # Ajouter au chat
+                        st.session_state.chat_history_normal.append({"role": "assistant", "content": response})
+                        
+                        # Sauvegarder dans mémoire vectorielle
+                        try:
+                            from chat_memory import save_to_conversation_memory
+                            save_to_conversation_memory(prompt, response, st.session_state.chat_vectordb)
+                        except:
+                            pass
+                        
+                        st.rerun()
+                        
+                    except Exception as e:
+                        error_msg = f"❌ Erreur: {str(e)}"
+                        st.session_state.chat_history_normal.append({"role": "assistant", "content": error_msg})
+                        st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # ===============================================
+    # Onglet Chat Fichiers: Analyse de documents et médias
+    # ===============================================
+    with tab_files:
+        # Contrôles compacts dans un expander
+        with st.expander("⚙️ Configuration", expanded=False):
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                model_choice = st.selectbox(
+                    "🎯 **Modèle IA**",
+                    options=list(WORKING_MODELS.keys()),
+                    index=0,
+                    key="model_select_files",
+                    help="Choisis le modèle d'IA pour tes réponses"
+                )
+                # Mettre à jour llm_model dans session_state
+                st.session_state.llm_model = WORKING_MODELS[model_choice]
+                st.session_state.current_model = WORKING_MODELS[model_choice]
+            with col2:
+                web_enabled = st.checkbox("🌐 **Recherche web activée**", value=True, key="web_files", help="Active la recherche web pour des réponses plus complètes")
         
         # Analyser automatiquement les médias uploadés (avant le chat_input)
         # media_analysis_results = []  # Maintenant global dans session_state
@@ -5233,7 +5599,8 @@ def main():
                                 # Charger l'embedding model
                                 embedding_model = HuggingFaceEmbeddings(
                                     model_name="sentence-transformers/all-MiniLM-L6-v2",
-                                    cache_folder=str(SENTENCE_TRANSFORMER_CACHE)
+                                    cache_folder=str(SENTENCE_TRANSFORMER_CACHE),
+                                    model_kwargs={'device': 'cpu', 'trust_remote_code': True}
                                 )
                                 
                                 # Chunker le texte
@@ -6147,200 +6514,18 @@ Réponds de manière structurée et professionnelle:"""
         with chat_container:
             for message in st.session_state.chat_history:
                 if message["role"] == "user":
-                    st.markdown(f'''<div class="chat-message-user" style="
-                        background: linear-gradient(145deg, #0088ff 0%, #00ff88 100%);
-                        color: white;
-                        padding: 1.2rem 1.8rem;
-                        border-radius: 18px 18px 4px 18px;
-                        margin: 1.5rem 0.5rem 1.5rem auto;
-                        max-width: 75%;
-                        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-                        border: 2px solid;
-                        border-image: linear-gradient(45deg, #0088ff, #00ff88, #0088ff) 1;
-                        animation: borderGlow 2s ease-in-out infinite, slideInRight 0.4s ease-out;
-                        font-weight: 500;
-                    ">
-                        <strong>👤 Vous:</strong><br>{message["content"]}
-                    </div>
-                    <style>
-                    @keyframes borderGlow {{{{
-                        0%, 100% {{{{ border-image: linear-gradient(45deg, #0088ff, #00ff88, #0088ff) 1; }}}}
-                        50% {{{{ border-image: linear-gradient(45deg, #00ff88, #00ffff, #00ff88) 1; }}}}
-                    }}}}
-                    @keyframes slideInRight {{{{
-                        0% {{{{ transform: translateX(30px); opacity: 0; }}}}
-                        100% {{{{ transform: translateX(0); opacity: 1; }}}}
-                    }}}}
-                    </style>
-                    ''', unsafe_allow_html=True)
+                    with st.chat_message("user", avatar="👤"):
+                        st.markdown(message["content"])
+                
                 elif message["role"] == "web_media":
                     # Affichage spécial pour les médias web
-                    st.markdown(message["content"], unsafe_allow_html=True)
+                    with st.chat_message("assistant", avatar="🌐"):
+                        st.markdown(message["content"], unsafe_allow_html=True)
+                
                 else:
-                    # Vérifier si c'est du HTML pur (panneau d'outils PDF ou contient <div)
-                    content = message.get("content", "")
-                    is_html_flag = message.get("is_html", False)
-                    has_div_tags = ("<div" in content and "</div>" in content)
-                    has_style_attr = "style=" in content
-                    
-                    # Si c'est du HTML (flag OU contient div OU contient style), le rendre directement
-                    if is_html_flag or has_div_tags or has_style_attr:
-                        st.markdown(content, unsafe_allow_html=True)
-                        continue  # Skip le reste du formatage
-                    
-                    # Formater la réponse avec Markdown pour structure
-                    formatted_response = content
-                    
-                    # Carte complète en un seul bloc avec contenu markdown
-                    st.markdown(f'''
-<style>
-@keyframes borderShimmer {{{{
-    0%, 100% {{{{ border-image: linear-gradient(135deg, #00ff88, #0088ff, #00ff88) 1; }}}}
-    50% {{{{ border-image: linear-gradient(135deg, #0088ff, #00ffff, #0088ff) 1; }}}}
-}}}}
-
-@keyframes logoGlow {{{{
-    0%, 100% {{{{ filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.5)); }}}}
-    50% {{{{ filter: drop-shadow(0 0 20px rgba(0, 255, 136, 0.8)); }}}}
-}}}}
-
-@keyframes slideIn {{{{
-    0% {{{{ transform: translateY(20px); opacity: 0; }}}}
-    100% {{{{ transform: translateY(0); opacity: 1; }}}}
-}}}}
-
-.kibali-response-box h2 {{{{
-    color: #0066cc !important;
-    font-size: 1.6rem !important;
-    font-weight: 700 !important;
-    margin-top: 1.5rem !important;
-    margin-bottom: 1rem !important;
-}}}}
-
-.kibali-response-box h3 {{{{
-    color: #00aa66 !important;
-    font-size: 1.3rem !important;
-    font-weight: 700 !important;
-    margin-top: 1.2rem !important;
-    margin-bottom: 0.8rem !important;
-}}}}
-
-.kibali-response-box p {{{{
-    color: #1a1a1a !important;
-    font-weight: 600 !important;
-    font-size: 1.05rem !important;
-    margin: 1rem 0 !important;
-    line-height: 1.8 !important;
-}}}}
-
-.kibali-response-box ul, .kibali-response-box ol {{{{
-    color: #1a1a1a !important;
-    font-weight: 600 !important;
-}}}}
-
-.kibali-response-box li {{{{
-    color: #1a1a1a !important;
-    font-weight: 600 !important;
-    margin: 0.5rem 0 !important;
-}}}}
-
-.kibali-response-box strong {{{{
-    color: #0066cc !important;
-    font-weight: 700 !important;
-    font-size: 1.1rem !important;
-}}}}
-
-.kibali-response-box code {{{{
-    background: rgba(0, 170, 102, 0.1);
-    padding: 0.2rem 0.4rem;
-    border-radius: 4px;
-    color: #00aa66;
-    font-weight: 600 !important;
-}}}}
-
-.kibali-response-box a {{{{
-    color: #0066cc !important;
-    font-weight: 600 !important;
-    text-decoration: underline;
-}}}}
-
-/* Forcer le texte NOIR et gras sur TOUT le contenu */
-.kibali-response-box * {{{{
-    color: #1a1a1a !important;
-    font-weight: 600 !important;
-}}}}
-</style>
-
-<div class="kibali-response-box" style="
-    background: rgba(255, 255, 255, 0.95);
-    padding: 2rem;
-    border-radius: 16px;
-    margin: 2rem 0.5rem;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15), 0 8px 40px rgba(0, 0, 0, 0.1);
-    border: 2px solid rgba(255, 255, 255, 0.8);
-    animation: slideIn 0.5s ease-out;
-">
-    <div style="
-        display: flex; 
-        align-items: center; 
-        margin-bottom: 1.5rem; 
-        gap: 0.75rem;
-        padding-bottom: 1rem;
-        border-bottom: 2px solid rgba(0, 255, 136, 0.2);
-    ">
-        <span style="
-            font-size: 2rem; 
-            font-weight: 900;
-            background: linear-gradient(135deg, #00ff88 0%, #00ffff 50%, #0088ff 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            animation: logoGlow 2s ease-in-out infinite;
-            filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.5));
-        ">K</span>
-        <strong style="
-            color: #00ff88; 
-            font-size: 1.2rem;
-            text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
-        ">Kibali AI</strong>
-        <span style="
-            margin-left: auto;
-            padding: 0.4rem 1rem;
-            background: linear-gradient(135deg, rgba(0, 255, 136, 0.2), rgba(0, 136, 255, 0.2));
-            border: 1px solid rgba(0, 255, 136, 0.4);
-            border-radius: 25px;
-            font-size: 0.8rem;
-            color: #00ff88;
-            font-weight: 600;
-        ">🤖 Réponse enrichie</span>
-    </div>
-    
-    <div style="line-height: 1.8; font-size: 1.05rem; color: #ffffff;">
-        {formatted_response}
-    </div>
-</div>
-''', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Ancre pour auto-scroll vers le bas
-        st.markdown('<div id="chat-bottom"></div>', unsafe_allow_html=True)
-        
-        # Script JavaScript pour auto-scroll
-        st.markdown("""
-        <script>
-        // Auto-scroll vers le bas quand nouveaux messages
-        const chatBottom = document.getElementById('chat-bottom');
-        if (chatBottom) {
-            chatBottom.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
-        
-        // Garder le focus sur l'input
-        const chatInput = document.querySelector('[data-testid="stChatInput"] input');
-        if (chatInput) {
-            chatInput.focus();
-        }
-        </script>
-        """, unsafe_allow_html=True)
+                    # Message assistant avec avatar K personnalisé
+                    with st.chat_message("assistant", avatar="🗺️"):
+                        st.markdown(message.get("content", ""))
         
         # Input de chat stylisé - TOUJOURS EN BAS
         if prompt := st.chat_input("💭 Pose ta question ici...", key="chat_input"):
@@ -6433,11 +6618,149 @@ QUESTION UTILISATEUR: {prompt}"""
             needs_data_extraction = any(kw in question_lower for kw in ['données', 'valeurs', 'liste', 'extrait', 'montre', 'affiche', 'trouve'])
             needs_conversion = any(kw in question_lower for kw in ['convertis', 'convert', 'numpy', 'tableau', 'dataframe', 'pandas', 'csv', 'json', 'extraction'])
             needs_ert_analysis = any(kw in question_lower for kw in ['ert', 'résistivité', 'resistivité', 'géophysique', 'forage', 'nappe', 'aquifère', 'eau souterraine'])
+            # Détection PDF: mots action + format (nombre optionnel)
+            needs_pdf_generation = any(kw in question_lower for kw in ['rédige', 'génère', 'crée', 'écris', 'fait']) and any(kw in question_lower for kw in ['pdf', 'rapport', 'document', 'thèse', 'livre', 'mémoire'])
+            
+            # 📄 GÉNÉRATION DE PDF MASSIF (20-500 PAGES)
+            if needs_pdf_generation:
+                import re
+                from pdf_generator_tool import generate_massive_pdf
+                
+                # Extraire le nombre de pages
+                num_pages = 30  # défaut
+                numbers_found = re.findall(r'\b(\d+)\b', prompt)
+                for num_str in numbers_found:
+                    n = int(num_str)
+                    if 10 <= n <= 500:
+                        num_pages = n
+                        break
+                
+                # Extraire le sujet
+                topic_patterns = [
+                    r'sur\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+                    r'sur\s+(.+)',
+                    r'de\s+(.+?)(?:\s*$|\s+en\s+pdf)',
+                ]
+                
+                topic = "Sujet non spécifié"
+                for pattern in topic_patterns:
+                    match = re.search(pattern, prompt, re.IGNORECASE)
+                    if match:
+                        topic = match.group(1).strip()
+                        break
+                
+                # Afficher le plan
+                with st.expander("📋 Plan de Génération PDF", expanded=True):
+                    st.markdown(f"""
+                    ### 📄 Génération de Document Massif
+                    
+                    **Sujet:** {topic}
+                    **Pages:** {num_pages}
+                    **Modèle:** {WORKING_MODELS[model_choice]}
+                    
+                    **Étapes:**
+                    1. ✅ Structure du document (Table des matières)
+                    2. ⏳ Introduction (2-3 pages)
+                    3. ⏳ Chapitres ({num_pages // 10} chapitres × 8-10 pages)
+                    4. ⏳ Conclusion (2-3 pages)
+                    5. ⏳ Compilation PDF avec ReportLab
+                    
+                    **Temps estimé:** {num_pages // 2} - {num_pages} minutes
+                    """)
+                
+                # Barre de progression
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                def update_progress(step, total, message):
+                    progress_bar.progress(step / total)
+                    status_text.text(f"⚡ {message} ({step}%)")
+                
+                try:
+                    # Générer le PDF
+                    client = create_client()
+                    pdf_bytes = generate_massive_pdf(
+                        topic=topic,
+                        num_pages=num_pages,
+                        client=client,
+                        model_name=WORKING_MODELS[model_choice],
+                        progress_callback=update_progress
+                    )
+                    
+                    # Succès!
+                    progress_bar.progress(100)
+                    status_text.text("✅ PDF généré avec succès!")
+                    
+                    # Bouton de téléchargement
+                    st.download_button(
+                        label="📥 Télécharger le PDF",
+                        data=pdf_bytes,
+                        file_name=f"{topic[:30]}__{num_pages}pages.pdf",
+                        mime="application/pdf"
+                    )
+                    
+                    # Afficher les statistiques
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("📄 Pages", num_pages)
+                    with col2:
+                        st.metric("💾 Taille", f"{len(pdf_bytes) / 1024:.1f} KB")
+                    with col3:
+                        st.metric("✅ Statut", "Terminé")
+                    
+                    # Message de confirmation
+                    response = f"""✅ **Document PDF généré avec succès!**
+
+📊 **Détails:**
+- 📄 **Sujet:** {topic}
+- 📏 **Pages:** {num_pages}
+- 💾 **Taille:** {len(pdf_bytes) / 1024:.1f} KB
+- 📁 **Format:** PDF professionnel avec ReportLab
+- 🎨 **Structure:** Introduction, {num_pages // 10} chapitres, Conclusion
+
+**Contenu inclus:**
+- ✅ Page de titre
+- ✅ Table des matières
+- ✅ Introduction détaillée
+- ✅ Chapitres structurés avec sous-sections
+- ✅ Conclusion synthétique
+- ✅ Mise en page professionnelle
+
+Cliquez sur le bouton ci-dessus pour télécharger votre document!"""
+                    
+                    st.session_state.chat_history.append({"role": "assistant", "content": response})
+                    
+                    with chat_container:
+                        with st.chat_message("assistant", avatar="🗺️"):
+                            st.markdown(response)
+                    
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ Erreur lors de la génération: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+                    return
             
             # ═══════════════════════════════════════════════════════════════════
             # FICHIER BINAIRE - CONTEXTE ABSOLU ET EXCLUSIF (AVEC CACHE)
             # ═══════════════════════════════════════════════════════════════════
-            if 'binary_files' in st.session_state and st.session_state.binary_files:
+            # ⚡ VÉRIFIER SI LA QUESTION CONCERNE **VRAIMENT** LE FICHIER UPLOADÉ
+            # Mots-clés TRÈS SPÉCIFIQUES pour éviter les faux positifs
+            question_about_file = (
+                'binary_files' in st.session_state and 
+                st.session_state.binary_files and
+                any(kw in question_lower for kw in [
+                    'ce fichier', 'le fichier', 'du fichier', 'dans le fichier',
+                    'fichier uploadé', 'fichier téléchargé', 'données du fichier',
+                    'contenu du fichier', 'analyse du fichier', 'ce .dat', 'ce .csv',
+                    'résistivité du', 'profondeur dans', 'valeurs du fichier',
+                    'colonnes du', 'lignes du fichier', 'structure du fichier'
+                ])
+            )
+            
+            # LOGIQUE FICHIER: Seulement si VRAIMENT une question sur le fichier
+            if question_about_file:
                 # RÉCUPÉRER LE DERNIER FICHIER UPLOADÉ (le plus récent)
                 binary = st.session_state.binary_files[-1]
                 

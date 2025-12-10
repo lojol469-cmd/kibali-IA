@@ -1,0 +1,14 @@
+{
+  ".jpg": {
+    "count": 1,
+    "examples": [
+      "image.jpg"
+    ],
+    "sizes": [
+      1024000
+    ],
+    "uses": [
+      "photo"
+    ]
+  }
+}
